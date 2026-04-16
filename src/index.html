@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Signal Audio</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      overflow: hidden;
+      background: #000;
+      font-family: 'Segoe UI', system-ui, monospace;
+    }
+    canvas {
+      position: absolute;
+      top: 0; left: 0;
+      display: block;
+    }
+
+    /* Start button overlay — starts invisible, fades in after splash hands off */
+    #start-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.45);
+      backdrop-filter: blur(6px);
+      opacity: 0;
+      transition: opacity 1.2s ease-out;
+    }
+    #start-overlay.ready {
+      opacity: 1;
+    }
+    #start-overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+    #start-btn {
+      background: rgba(20, 30, 55, 0.55);
+      border: 1px solid rgba(140, 160, 230, 0.3);
+      color: rgba(230, 240, 255, 0.9);
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 12px;
+      letter-spacing: 8px;
+      padding: 18px 40px;
+      border-radius: 4px;
+      cursor: pointer;
+      text-transform: uppercase;
+      font-weight: 300;
+      backdrop-filter: blur(12px);
+      transition: background 0.3s, border-color 0.3s, letter-spacing 0.3s;
+    }
+    #start-btn:hover {
+      background: rgba(40, 55, 100, 0.7);
+      border-color: rgba(180, 200, 255, 0.55);
+      letter-spacing: 10px;
+    }
+
+    /* Info strip inside the hidden bar */
+    #info-strip {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 0 14px;
+      color: rgba(200, 215, 240, 0.55);
+      font-family: 'Consolas', monospace;
+      font-size: 10px;
+      letter-spacing: 1px;
+      white-space: nowrap;
+    }
+    #info-desc {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      color: rgba(180, 200, 240, 0.45);
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      text-transform: lowercase;
+      line-height: 1.35;
+    }
+    #info-desc .row {
+      display: flex;
+      gap: 10px;
+      white-space: nowrap;
+    }
+    #info-desc .tag {
+      color: rgba(140, 180, 220, 0.7);
+      font-weight: 600;
+      letter-spacing: 2px;
+    }
+    #info-desc .sep {
+      color: rgba(100, 120, 160, 0.4);
+    }
+    #info-arch {
+      color: rgba(220, 200, 255, 0.75);
+      letter-spacing: 2px;
+      cursor: pointer;
+      padding: 3px 8px;
+      border: 1px solid rgba(140, 120, 200, 0.25);
+      border-radius: 4px;
+      transition: all 0.2s;
+    }
+    #info-arch:hover {
+      color: rgba(240, 225, 255, 0.95);
+      border-color: rgba(180, 150, 240, 0.5);
+    }
+    #info-fps {
+      color: rgba(140, 180, 220, 0.4);
+      font-size: 9px;
+    }
+
+    /* Mode switcher — hidden at bottom center, appears on hover */
+    #mode-bar {
+      position: fixed;
+      bottom: 0; left: 50%;
+      transform: translateX(-50%) translateY(100%);
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      padding: 8px 16px;
+      background: rgba(10, 12, 20, 0.7);
+      backdrop-filter: blur(12px);
+      border-radius: 10px 10px 0 0;
+      border: 1px solid rgba(80, 100, 160, 0.15);
+      border-bottom: none;
+      transition: transform 0.3s ease;
+    }
+    #mode-trigger {
+      position: fixed;
+      bottom: 0; left: 50%;
+      transform: translateX(-50%);
+      width: 120px; height: 20px;
+      z-index: 19;
+    }
+    #mode-trigger:hover + #mode-bar,
+    #mode-bar:hover {
+      transform: translateX(-50%) translateY(0);
+    }
+    #mode-bar button {
+      background: rgba(30, 35, 55, 0.6);
+      border: 1px solid rgba(80, 100, 160, 0.2);
+      color: rgba(180, 200, 240, 0.5);
+      font-family: 'Consolas', monospace;
+      font-size: 11px;
+      letter-spacing: 2px;
+      padding: 6px 18px;
+      border-radius: 5px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.2s;
+    }
+    #mode-bar button:hover {
+      background: rgba(50, 60, 90, 0.7);
+      color: rgba(220, 230, 255, 0.8);
+    }
+    #mode-bar button.active {
+      background: rgba(60, 80, 140, 0.5);
+      border-color: rgba(120, 150, 255, 0.4);
+      color: rgba(220, 230, 255, 0.9);
+    }
+  </style>
+</head>
+<body>
+  <div id="start-overlay">
+    <button id="start-btn">Tune In</button>
+  </div>
+  <div id="mode-trigger"></div>
+  <div id="mode-bar">
+    <button id="mode-2d" class="active">Signal</button>
+    <button id="mode-3d">Wanderer</button>
+    <div id="info-strip">
+      <div id="info-desc">
+        <div class="row"><span class="tag">EQUATION</span><span>1 − |ƒ(p)|</span><span class="sep">,</span><span>ƒ : ℝ³ → ℝ smooth and random</span></div>
+        <div class="row"><span class="tag">RESULT</span><span>density ridges form a connected filament network, voids between</span></div>
+        <div class="row"><span class="tag">TRUTH</span><span>the math has no concept of galaxies or neurons</span><span class="sep">—</span><span>and yet it renders both</span></div>
+      </div>
+      <div id="info-arch" title="Click to cycle color archetype">EMERGENT</div>
+      <div id="info-fps">—</div>
+    </div>
+  </div>
+  <div id="diag" style="display:none"></div>
+
+  <script src="analysis.js"></script>
+  <script src="audio.js"></script>
+  <script src="renderer.js"></script>
+</body>
+</html>

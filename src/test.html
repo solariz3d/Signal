@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Audio Test</title>
+  <style>
+    body { margin: 40px; background: #000; color: #fff; font-family: monospace; font-size: 18px; }
+    button { font-size: 24px; padding: 20px 40px; margin: 20px 0; background: #246; color: #fff; border: none; cursor: pointer; }
+    #log { background: #111; padding: 20px; min-height: 200px; white-space: pre-wrap; margin-top: 20px; }
+  </style>
+</head>
+<body>
+  <h1>Signal Audio — Capture Test</h1>
+  <button id="btn">Click to test audio capture</button>
+  <div id="log">Waiting for click...</div>
+
+  <script>
+    const log = document.getElementById('log');
+    function say(msg) {
+      log.textContent += '\n' + msg;
+      console.log(msg);
+    }
+
+    document.getElementById('btn').addEventListener('click', async () => {
+      say('Button clicked.');
+      try {
+        say('Calling getDisplayMedia...');
+        const stream = await navigator.mediaDevices.getDisplayMedia({
+          audio: true,
+          video: { width: 320, height: 240, frameRate: 30 }
+        });
+        say('Got stream! Audio tracks: ' + stream.getAudioTracks().length);
+        say('Video tracks: ' + stream.getVideoTracks().length);
+
+        if (stream.getAudioTracks().length > 0) {
+          const t = stream.getAudioTracks()[0];
+          say('Audio track label: ' + t.label);
+          say('Audio track settings: ' + JSON.stringify(t.getSettings()));
+        }
+
+        stream.getVideoTracks().forEach(v => v.stop());
+
+        const ctx = new AudioContext();
+        const src = ctx.createMediaStreamSource(stream);
+        const analyser = ctx.createAnalyser();
+        analyser.fftSize = 2048;
+        src.connect(analyser);
+        const data = new Uint8Array(analyser.frequencyBinCount);
+
+        say('AudioContext sampleRate: ' + ctx.sampleRate);
+        say('Sampling FFT every 500ms...');
+
+        setInterval(() => {
+          analyser.getByteFrequencyData(data);
+          let max = 0, sum = 0;
+          for (let i = 0; i < data.length; i++) { sum += data[i]; if (data[i] > max) max = data[i]; }
+          const avg = sum / data.length;
+          log.innerHTML = log.innerHTML.split('\nCURRENT:')[0] + '\nCURRENT: avg=' + avg.toFixed(1) + ' max=' + max;
+        }, 500);
+      } catch (err) {
+        say('ERROR: ' + err.name + ' - ' + err.message);
+      }
+    });
+  </script>
+</body>
+</html>

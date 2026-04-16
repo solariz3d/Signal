@@ -1,0 +1,13 @@
+{
+  "name": "signal-audio",
+  "version": "1.0.0",
+  "description": "The Signal — music reactive. Cosmic web that becomes the equalizer.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev"
+  },
+  "dependencies": {
+    "electron": "^35.0.0"
+  }
+}
