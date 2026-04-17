@@ -161,6 +161,36 @@
       border-color: rgba(120, 150, 255, 0.4);
       color: rgba(220, 230, 255, 0.9);
     }
+    /* Intensity slider — decouples visual intensity from playback volume */
+    #intensity-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 10px;
+      color: rgba(180, 200, 240, 0.55);
+      font-family: 'Consolas', monospace;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+    }
+    #intensity-label { color: rgba(140, 180, 220, 0.7); text-transform: uppercase; }
+    #intensity-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 90px; height: 3px;
+      background: rgba(80, 100, 160, 0.3);
+      border-radius: 2px;
+      outline: none;
+    }
+    #intensity-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 10px; height: 10px;
+      background: rgba(180, 200, 255, 0.85);
+      border-radius: 50%;
+      cursor: pointer;
+      border: 1px solid rgba(120, 150, 255, 0.5);
+    }
+    #intensity-value { color: rgba(220, 230, 255, 0.75); min-width: 30px; text-align: right; }
   </style>
 </head>
 <body>
@@ -171,6 +201,16 @@
   <div id="mode-bar">
     <button id="mode-2d" class="active">Signal</button>
     <button id="mode-3d">Wanderer</button>
+    <div id="intensity-wrap">
+      <span id="intensity-label">Intensity</span>
+      <input type="range" id="intensity-slider" min="10" max="100" value="100">
+      <span id="intensity-value">100%</span>
+    </div>
+    <div id="intensity-wrap">
+      <span id="intensity-label">Color</span>
+      <input type="range" id="color-slider" min="10" max="100" value="100">
+      <span id="color-value">100%</span>
+    </div>
     <div id="info-strip">
       <div id="info-desc">
         <div class="row"><span class="tag">EQUATION</span><span>1 − |ƒ(p)|</span><span class="sep">,</span><span>ƒ : ℝ³ → ℝ smooth and random</span></div>

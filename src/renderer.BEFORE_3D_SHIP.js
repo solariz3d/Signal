@@ -480,33 +480,14 @@ const prog3D = mkP(VS,
      vec3 rd = normalize(camFwd * uFov + camRight * st.x + camUp * st.y);
 
      // Ship position — three harmonics per axis with irrational multipliers
-     // 3D ship position — Lissajous orbit in WORLD space, placed 4 units
-     // ahead of the camera along its forward direction, with lateral drift
-     // via PHI/E-rate sines on all three axes. Travels WITH the camera so
-     // you're always chasing it, but its position in noise-space means
-     // camera parallax and filament occlusion work correctly.
+     // (PHI, E) for a non-repeating, more dynamic path. Rates ~2x faster for
+     // more active lateral drift while staying graceful (not frenetic).
      float PHI_S = 1.61803;
      float E_S = 2.71828;
-     float shipDistAhead = 4.0;
-     vec3 shipAnchor = camPos + camFwd * shipDistAhead;
-     vec3 shipOffset = vec3(
-       sin(uTime * 0.15 * PHI_S) * 0.9 + cos(uTime * 0.09 * E_S) * 0.6,
-       cos(uTime * 0.11 * PHI_S) * 0.75 + sin(uTime * 0.08 * E_S) * 0.5,
-       sin(uTime * 0.13 * PHI_S) * 0.4 + cos(uTime * 0.07 * E_S) * 0.3
-     );
-     vec3 shipPos3D = shipAnchor + shipOffset;
-     // Project the 3D ship position onto screen space for the screen-space
-     // effects (plasma, flare, trail) that still want a shipPos vec2.
-     // Matches the ray direction formulation: rd = camFwd*uFov + camRight*st.x + camUp*st.y
-     vec3 shipRel = shipPos3D - camPos;
-     float shipForwardDepth = dot(shipRel, camFwd);
-     float shipScreenDepth = max(shipForwardDepth, 0.1) / uFov;
      vec2 shipPos = vec2(
-       dot(shipRel, camRight) / shipScreenDepth,
-       dot(shipRel, camUp)    / shipScreenDepth
+       sin(uTime * 0.15 * PHI_S) * 0.14 + cos(uTime * 0.09 * E_S) * 0.1 + sin(uTime * 0.05) * 0.07,
+       cos(uTime * 0.11 * PHI_S) * 0.12 + sin(uTime * 0.08 * E_S) * 0.1 + cos(uTime * 0.06) * 0.08
      );
-     // Hide behind-camera ship (screen effects only — volumetric already skips)
-     float shipInFront = step(0.1, shipForwardDepth);
 
      vec3 col = vec3(0.0);
      float totalDensity = 0.0;
@@ -577,15 +558,6 @@ const prog3D = mkP(VS,
        float ambient = 3.0;
        float musicLight = uRms * 1.5 + uBass * 0.8;
        col += filamentColor * chromShift * density * alpha * depthFade * brightMod * (ambient + musicLight);
-
-       // === 3D ship volumetric contribution ===
-       // At each march step, add ship glow if close to its world-space position.
-       float shipVolDist = length(p - shipPos3D * uZoom);
-       float shipVol = exp(-shipVolDist * shipVolDist * 4.0);
-       float shipVolAmp = (uSubBass * 1.8 + uKickTransient * 3.5) * smoothstep(0.03, 0.1, uSubBass);
-       col += vec3(1.0, 0.88, 0.6) * shipVol * shipVolAmp * (1.0 - totalDensity) * depthFade * 1.2;
-
-
        totalDensity += alpha;
        if (totalDensity > 0.95) break;
      }
@@ -607,16 +579,10 @@ const prog3D = mkP(VS,
      float shipDist = length(st - shipPos);
      float kickPulse = clamp(uKickTransient * 5.0, 0.0, 1.0);
 
-     // Ship size scales smoothly with audio presence: tiny point at silence,
-     // pulses out to normal size with any noise, further expanded by sub-bass
-     // and kicks. Smooth transition avoids jank.
-     float sizePresence = smoothstep(0.0, 0.08, uRms);
-     float expansion = 0.06 + sizePresence * 0.94 + uSubBass * 15.0 + kickPulse * 30.0;
+     float expansion = 1.0 + uSubBass * 15.0 + kickPulse * 30.0;
      // Sharper falloff (2500 vs 1500) — tighter core with crisper outline
      float falloff = 2500.0 / expansion;
-     // Emergence: tiny baseline visibility in silence so the pinpoint ship
-     // is always there, smoothly pulsing up with any noise. No hard pop.
-     float shipEmerge = 0.18 + 0.82 * smoothstep(0.005, 0.1, uRms);
+     float shipEmerge = smoothstep(0.03, 0.1, uSubBass);
 
      // Plasma field — silent ship = clean pinpoint, loud sub-bass = roiling plasma
      vec2 plasmaCoord = (st - shipPos) * (14.0 / sqrt(expansion));
@@ -1199,7 +1165,6 @@ function render(now) {
   camX += dt * speed * nX;
   camY += dt * speed * nY;
   camZ += dt * speed * nZ;
-
 
   // Update spectrum texture
   for (let i = 0; i < 64; i++) {

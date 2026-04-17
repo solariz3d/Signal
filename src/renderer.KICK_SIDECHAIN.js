@@ -155,12 +155,6 @@ const prog2D = mkP(VS,
    // Visual sidechain — spikes to 1 on kick, decays ~200ms. Ducks bassline
    // visuals so the kick cuts through.
    uniform float uSidechain;
-   // Pulsar jet rotation angle — tempo-locked (integrated at BPM/60 * 2π/32 rad/s in JS).
-   uniform float uJetAngle;
-   // Per-pulse frozen jet angles — each pulse travels in the direction the
-   // jet was pointing when it fired, even as the jet system keeps rotating.
-   uniform vec3 uPulseJetAngles;
-   uniform vec3 uPulseJetAngles2;
 
    varying vec2 vUv;
 
@@ -201,27 +195,12 @@ const prog2D = mkP(VS,
      // bass instead of exploding into thick chaotic distortion.
      float centerChurn = centerWeight * uChurnAmt * 0.45;
 
-     // Quasar expulsion field — bass-gated continuous outward push + kick burst.
-     // Jet-biased along the rotating axis, jet-weight ramp handles atan chaos
-     // near center by making push radially uniform at small radius.
-     vec2 flashDir = (st - pullCenter) / (pullRad + 0.001);
-     float preAngle = atan(st.y - pullCenter.y, st.x - pullCenter.x);
-     float preJetAng = uJetAngle;
-     float preJetAlign = pow(abs(cos(preAngle - preJetAng)), 3.0);
-     float jetWeight = smoothstep(0.03, 0.15, pullRad);
-     float basePush = pow(smoothstep(0.45, 0.0, pullRad), 1.2)
-                    * (0.08 + 0.18 * preJetAlign * jetWeight)
-                    * uBass * 1.8;
-     float kickPush = pow(smoothstep(0.38, 0.0, pullRad), 1.4) * uSidechain * 0.32 * preJetAlign * jetWeight;
-     float totalPush = basePush + kickPush;
-     vec3 st3_kick = st3 + vec3(flashDir * totalPush, 0.0) * uZoom;
-
      float n = 0.0;
      float amp = 0.6;
      float freq = 1.0;
      for (int i = 0; i < 4; i++) {
        // Time offset includes center churn — noise evolves faster at center on bass
-       float raw = snoise(st3_kick * freq + vec3(0., 0., t + float(i) * 1.7 + uSeed + centerChurn));
+       float raw = snoise(st3 * freq + vec3(0., 0., t + float(i) * 1.7 + uSeed + centerChurn));
        float ridge = 1.0 - abs(raw);
        float band = (i == 0) ? bands[0] :
                     (i == 1) ? bands[1] :
@@ -294,104 +273,62 @@ const prog2D = mkP(VS,
 
      col += ridgeColor * n * (1.3 + uRms * 0.8) * duck;
 
-     // === Traveling kick pulses with FROZEN jet direction per pulse ===
-     // Each pulse uses its own stored jet angle (from when it fired) so
-     // it travels in a straight line while the jet system keeps rotating.
-     // Need toCenterN for per-pulse beam alignment — declare here.
-     vec2 toCenter_p = st - pullCenter;
-     vec2 toCenterN = toCenter_p / (length(toCenter_p) + 0.001);
-     float waveSpeed = 1.6;
+     // === Traveling kick pulses — radiate outward through the network ===
+     // Each kick spawns a wavefront that expands at waveSpeed. Asymmetric
+     // shell (sharp leading edge, soft trailing decay). Tinted with kickColor
+     // — the same hue that appears at the equalizer center on bass.
+     float waveSpeed = 1.1;
      float shellWidth = 0.14;
-     float pulseBeamSum = 0.0;  // sum of per-pulse (shell × beam) contributions
+     float pulseShell = 0.0;
 
+     // Unrolled — WebGL1 can't dynamic-index vec3
      vec3 pulsesA = uPulseAges;
      vec3 pulsesB = uPulseAges2;
-     vec3 angA = uPulseJetAngles;
-     vec3 angB = uPulseJetAngles2;
 
-     // Helper computes shell intensity × beam concentration for one pulse
-     // using its frozen angle. Inline-repeated 6 times (WebGL1 — no dynamic indexing).
-     #define PULSE_CONTRIB(age, ang) \
-       if (age < 6.0) { \
-         float d = pullRad - age * waveSpeed; \
-         float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8); \
-         float shell = exp(-d * d / w) * exp(-age * 0.6); \
-         vec2 pDir = vec2(cos(ang), sin(ang)); \
-         float pDot = abs(dot(toCenterN, pDir)); \
-         float pBeam = pow(pDot, 400.0) * smoothstep(0.97, 0.999, pDot); \
-         pulseBeamSum += shell * pBeam; \
-       }
-     PULSE_CONTRIB(pulsesA.x, angA.x)
-     PULSE_CONTRIB(pulsesA.y, angA.y)
-     PULSE_CONTRIB(pulsesA.z, angA.z)
-     PULSE_CONTRIB(pulsesB.x, angB.x)
-     PULSE_CONTRIB(pulsesB.y, angB.y)
-     PULSE_CONTRIB(pulsesB.z, angB.z)
+     if (pulsesA.x < 6.0) {
+       float d = pullRad - pulsesA.x * waveSpeed;
+       float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8);
+       pulseShell += exp(-d * d / w) * exp(-pulsesA.x * 0.35);
+     }
+     if (pulsesA.y < 6.0) {
+       float d = pullRad - pulsesA.y * waveSpeed;
+       float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8);
+       pulseShell += exp(-d * d / w) * exp(-pulsesA.y * 0.35);
+     }
+     if (pulsesA.z < 6.0) {
+       float d = pullRad - pulsesA.z * waveSpeed;
+       float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8);
+       pulseShell += exp(-d * d / w) * exp(-pulsesA.z * 0.35);
+     }
+     if (pulsesB.x < 6.0) {
+       float d = pullRad - pulsesB.x * waveSpeed;
+       float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8);
+       pulseShell += exp(-d * d / w) * exp(-pulsesB.x * 0.35);
+     }
+     if (pulsesB.y < 6.0) {
+       float d = pullRad - pulsesB.y * waveSpeed;
+       float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8);
+       pulseShell += exp(-d * d / w) * exp(-pulsesB.y * 0.35);
+     }
+     if (pulsesB.z < 6.0) {
+       float d = pullRad - pulsesB.z * waveSpeed;
+       float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8);
+       pulseShell += exp(-d * d / w) * exp(-pulsesB.z * 0.35);
+     }
 
-     // --- Pulsar jets with torus-preserving alignment ---
-     // Dot product (stable at origin) + tight pow 16 beam. Inner and outer
-     // use the SAME tightness so the beam stays narrow from pole to periphery.
-     // Equatorial plane stays dark → torus topology preserved.
-     // Radial dissipation — pulses dim toward frame edges.
-     float jetDissipate = smoothstep(1.2, 0.15, pullRad);
+     // Add pulse tint. Multiply by n so the wavefront only illuminates where
+     // filaments exist — it travels THROUGH the network, not across empty space.
+     // Sidechain boost cranked — the kick flashes dramatically brighter while
+     // the bassline only dips mildly. Relative brightness puts kick on top.
+     col += kickColor * pulseShell * n * (1.6 + uBass * 1.3 + uSidechain * 7.0);
 
-     // Pulse emission — per-pulse frozen direction × density × amplification.
-     // Heavier boost so the pulse jets are highly visible when they fire,
-     // while silence keeps the scene quiet (no persistent beam).
-     col += kickColor * pulseBeamSum * n * (18.0 + uBass * 6.0 + uSidechain * 28.0) * jetDissipate;
-
-     // Center kick-flash luminance — softer now since the field displacement
-     // above does most of the visual work. This is the afterglow of the impact,
-     // riding on the filaments (multiplied by n) rather than painting a disc.
+     // Center kick flash — bright burst AT the pull center, NOT subject to
+     // sidechain ducking. Solves the destructive-interference problem where
+     // the pulse was starting from a just-ducked center, making the kick look
+     // like a subtraction rather than an addition. This flash is purely
+     // additive and pops ON kick regardless of bassline state.
      float kickFlashMass = pow(smoothstep(0.38, 0.0, pullRad), 1.8);
-     col += kickColor * kickFlashMass * n * uSidechain * 3.5 * (0.8 + uBass * 0.7)
-          + kickColor * kickFlashMass * uSidechain * 0.6 * (0.8 + uBass * 0.7);
-
-     // Music-presence gate — dot + disk only visible when audio is playing.
-     // smoothstep from quiet RMS 0.01 to moderate 0.08 so they fade gracefully.
-     float musicPresent = smoothstep(0.01, 0.08, uRms) * (1.0 - uSilence);
-
-     // Pseudo-3D accretion ring — rotates with the jet axis so the disk is
-     // always perpendicular to the jets (correct topology). Squash along jet
-     // direction makes the ring appear as a horizontal ellipse when jets are
-     // vertical (viewing the disk face-on) and vice versa. Unified with the
-     // jet system.
-     vec2 diskCoord = st - pullCenter;
-     float diskJc = cos(uJetAngle), diskJs = sin(uJetAngle);
-     // Rotate into jet frame: jetFrame.x = along jet, jetFrame.y = perpendicular
-     vec2 jetFrame = vec2(diskJc * diskCoord.x + diskJs * diskCoord.y,
-                         -diskJs * diskCoord.x + diskJc * diskCoord.y);
-     // Squash along jet direction → ellipse's long axis perpendicular to jet
-     jetFrame.x *= 3.4;
-     float diskRad = length(jetFrame);
-     // Tiny accretion disk — halved radii, still touches the dot.
-     float diskInner = 0.0022;
-     float diskOuter = 0.008;
-     float diskInnerEdge = smoothstep(diskInner - 0.001, diskInner + 0.0002, diskRad);
-     float diskFalloff = pow(1.0 - smoothstep(diskInner, diskOuter, diskRad), 2.2);
-     float diskMask = diskInnerEdge * diskFalloff;
-     float diskAngle = atan(jetFrame.y, jetFrame.x);
-     // Rotating hot-spot for doppler/orbital asymmetry
-     float diskHotSpot = 0.65 + 0.35 * sin(diskAngle * 2.0 + uTime * 2.5);
-     float diskRadialT = (diskRad - diskInner) / (diskOuter - diskInner);
-     vec3 diskColor = mix(vec3(1.0, 0.75, 0.35), vec3(0.8, 0.4, 0.5), diskRadialT);
-     col += diskColor * diskMask * diskHotSpot * musicPresent * (2.0 + uBass * 0.8);
-
-     // Jet bridges — tiny thin lines from the dot's poles out to where the
-     // main jet beams begin. Width matches the dot so they read as emanating
-     // directly from its poles. Uses same jet-rotation as everything else.
-     float bridgeAlong = abs(jetFrame.x) * 3.4;
-     float bridgePerp = abs(jetFrame.y);
-     float bridgeAlongMask = smoothstep(0.0035, 0.006, bridgeAlong) * smoothstep(0.026, 0.008, bridgeAlong);
-     float bridgePerpMask = smoothstep(0.004, 0.001, bridgePerp);
-     vec3 bridgeColor = vec3(1.0, 0.92, 0.72);
-     col += bridgeColor * bridgeAlongMask * bridgePerpMask * musicPresent * (1.8 + uBass * 0.6 + uSidechain * 0.8);
-
-     // Quasar point — always visible, even in silence. Only the accretion
-     // disk fades with music. The dot is the event horizon: always there.
-     float dotMass = pow(smoothstep(0.004, 0.0, pullRad), 3.5);
-     vec3 dotColor = vec3(1.0, 0.96, 0.88) * (1.3 + uBass * 0.7 + uSidechain * 1.5);
-     col = mix(col, dotColor, dotMass);
+     col += kickColor * kickFlashMass * uSidechain * 2.2 * (0.8 + uBass * 0.7);
 
      // Ride pulse — concentric rings traveling outward, tinted with the 4th
      // palette color. Masked away from center (rad < 0.25) to avoid phase
@@ -480,33 +417,14 @@ const prog3D = mkP(VS,
      vec3 rd = normalize(camFwd * uFov + camRight * st.x + camUp * st.y);
 
      // Ship position — three harmonics per axis with irrational multipliers
-     // 3D ship position — Lissajous orbit in WORLD space, placed 4 units
-     // ahead of the camera along its forward direction, with lateral drift
-     // via PHI/E-rate sines on all three axes. Travels WITH the camera so
-     // you're always chasing it, but its position in noise-space means
-     // camera parallax and filament occlusion work correctly.
+     // (PHI, E) for a non-repeating, more dynamic path. Rates ~2x faster for
+     // more active lateral drift while staying graceful (not frenetic).
      float PHI_S = 1.61803;
      float E_S = 2.71828;
-     float shipDistAhead = 4.0;
-     vec3 shipAnchor = camPos + camFwd * shipDistAhead;
-     vec3 shipOffset = vec3(
-       sin(uTime * 0.15 * PHI_S) * 0.9 + cos(uTime * 0.09 * E_S) * 0.6,
-       cos(uTime * 0.11 * PHI_S) * 0.75 + sin(uTime * 0.08 * E_S) * 0.5,
-       sin(uTime * 0.13 * PHI_S) * 0.4 + cos(uTime * 0.07 * E_S) * 0.3
-     );
-     vec3 shipPos3D = shipAnchor + shipOffset;
-     // Project the 3D ship position onto screen space for the screen-space
-     // effects (plasma, flare, trail) that still want a shipPos vec2.
-     // Matches the ray direction formulation: rd = camFwd*uFov + camRight*st.x + camUp*st.y
-     vec3 shipRel = shipPos3D - camPos;
-     float shipForwardDepth = dot(shipRel, camFwd);
-     float shipScreenDepth = max(shipForwardDepth, 0.1) / uFov;
      vec2 shipPos = vec2(
-       dot(shipRel, camRight) / shipScreenDepth,
-       dot(shipRel, camUp)    / shipScreenDepth
+       sin(uTime * 0.15 * PHI_S) * 0.14 + cos(uTime * 0.09 * E_S) * 0.1 + sin(uTime * 0.05) * 0.07,
+       cos(uTime * 0.11 * PHI_S) * 0.12 + sin(uTime * 0.08 * E_S) * 0.1 + cos(uTime * 0.06) * 0.08
      );
-     // Hide behind-camera ship (screen effects only — volumetric already skips)
-     float shipInFront = step(0.1, shipForwardDepth);
 
      vec3 col = vec3(0.0);
      float totalDensity = 0.0;
@@ -518,11 +436,97 @@ const prog3D = mkP(VS,
        float marchDist = float(i) * stepSize;
        vec3 p = (camPos + rd * marchDist) * uZoom;
 
-       // Pulse waves from the camera have been removed — waves now emanate
-       // from the bass ship in screen space (see ship section below).
+       // === Traveling wave pulses — distort the structure itself ===
+       // Each kick spawns a wavefront that expands outward at waveSpeed.
+       // Within a narrow shell at the current wavefront distance, we:
+       //   1) Displace the noise sample coords radially (the filaments RIPPLE)
+       //   2) Multiplicatively boost brightness (Weber's law perception)
+       //   3) Shift color toward warm (chromatic cue for propagation)
+       // Asymmetric shell: sharp leading edge, soft trailing decay.
+       float waveSpeed = 5.0;
+       float shellWidth = 0.26;
+       // Scale pulse amplitude inversely with RMS — quiet sections get full punch,
+       // loud sections get a softer pulse so close filaments don't overblow.
+       // Light scaling — keeps wavefronts visible during loud music instead
+       // of crushing them. Final tone-mapping handles any real over-exposure.
+       float pulseAmp = 1.0 / (1.0 + uRms * 0.4);
        vec3 displaced_p = p;
        float brightMod = 1.0;
        vec3 chromShift = vec3(1.0);
+
+       // Unrolled explicitly for WebGL1 — no loops or dynamic indexing
+       vec3 pulses = uPulseAges;
+       // Pulse 1 — extended life so light reverberates through the network
+       // even during quiet passages between kicks. Distance-based energy
+       // dispersion (1/r²) so far wavefronts are naturally dimmer than near.
+       if (pulses.x < 20.0) {
+         float d1 = marchDist - pulses.x * waveSpeed;
+         float w = shellWidth * shellWidth * (d1 > 0.0 ? 0.15 : 2.4);
+         float frontDist1 = max(pulses.x * waveSpeed, 0.5);
+         float distFade1 = 1.0 / (1.0 + frontDist1 * frontDist1 * 0.009);
+         float shell = exp(-d1 * d1 / w) * exp(-pulses.x * 0.08) * distFade1;
+         displaced_p += rd * shell * 0.12 * pulseAmp;
+         brightMod += shell * 3.8 * pulseAmp;
+         chromShift *= mix(vec3(1.0), vec3(1.5, 1.0, 0.45), shell * 0.6 * pulseAmp);
+       }
+       // Pulse 2
+       if (pulses.y < 20.0) {
+         float d2 = marchDist - pulses.y * waveSpeed;
+         float w = shellWidth * shellWidth * (d2 > 0.0 ? 0.15 : 2.4);
+         float frontDist2 = max(pulses.y * waveSpeed, 0.5);
+         float distFade2 = 1.0 / (1.0 + frontDist2 * frontDist2 * 0.009);
+         float shell = exp(-d2 * d2 / w) * exp(-pulses.y * 0.08) * distFade2;
+         displaced_p += rd * shell * 0.12 * pulseAmp;
+         brightMod += shell * 3.8 * pulseAmp;
+         chromShift *= mix(vec3(1.0), vec3(1.5, 1.0, 0.45), shell * 0.6 * pulseAmp);
+       }
+       // Pulse 3
+       if (pulses.z < 20.0) {
+         float d3 = marchDist - pulses.z * waveSpeed;
+         float w = shellWidth * shellWidth * (d3 > 0.0 ? 0.15 : 2.4);
+         float frontDist3 = max(pulses.z * waveSpeed, 0.5);
+         float distFade3 = 1.0 / (1.0 + frontDist3 * frontDist3 * 0.009);
+         float shell = exp(-d3 * d3 / w) * exp(-pulses.z * 0.08) * distFade3;
+         displaced_p += rd * shell * 0.12 * pulseAmp;
+         brightMod += shell * 3.8 * pulseAmp;
+         chromShift *= mix(vec3(1.0), vec3(1.5, 1.0, 0.45), shell * 0.6 * pulseAmp);
+       }
+       // Older pulses — second ring of three so long-lived waves
+       // aren't evicted while still traveling through the network
+       vec3 pulses2 = uPulseAges2;
+       // Pulse 4
+       if (pulses2.x < 20.0) {
+         float d4 = marchDist - pulses2.x * waveSpeed;
+         float w = shellWidth * shellWidth * (d4 > 0.0 ? 0.15 : 2.4);
+         float frontDist4 = max(pulses2.x * waveSpeed, 0.5);
+         float distFade4 = 1.0 / (1.0 + frontDist4 * frontDist4 * 0.009);
+         float shell = exp(-d4 * d4 / w) * exp(-pulses2.x * 0.08) * distFade4;
+         displaced_p += rd * shell * 0.12 * pulseAmp;
+         brightMod += shell * 3.8 * pulseAmp;
+         chromShift *= mix(vec3(1.0), vec3(1.5, 1.0, 0.45), shell * 0.6 * pulseAmp);
+       }
+       // Pulse 5
+       if (pulses2.y < 20.0) {
+         float d5 = marchDist - pulses2.y * waveSpeed;
+         float w = shellWidth * shellWidth * (d5 > 0.0 ? 0.15 : 2.4);
+         float frontDist5 = max(pulses2.y * waveSpeed, 0.5);
+         float distFade5 = 1.0 / (1.0 + frontDist5 * frontDist5 * 0.009);
+         float shell = exp(-d5 * d5 / w) * exp(-pulses2.y * 0.08) * distFade5;
+         displaced_p += rd * shell * 0.12 * pulseAmp;
+         brightMod += shell * 3.8 * pulseAmp;
+         chromShift *= mix(vec3(1.0), vec3(1.5, 1.0, 0.45), shell * 0.6 * pulseAmp);
+       }
+       // Pulse 6
+       if (pulses2.z < 20.0) {
+         float d6 = marchDist - pulses2.z * waveSpeed;
+         float w = shellWidth * shellWidth * (d6 > 0.0 ? 0.15 : 2.4);
+         float frontDist6 = max(pulses2.z * waveSpeed, 0.5);
+         float distFade6 = 1.0 / (1.0 + frontDist6 * frontDist6 * 0.009);
+         float shell = exp(-d6 * d6 / w) * exp(-pulses2.z * 0.08) * distFade6;
+         displaced_p += rd * shell * 0.12 * pulseAmp;
+         brightMod += shell * 3.8 * pulseAmp;
+         chromShift *= mix(vec3(1.0), vec3(1.5, 1.0, 0.45), shell * 0.6 * pulseAmp);
+       }
 
        // Network self-pulse — during breaks (mids/highs present, no bass)
        // the structure reveals its own gentle energy traveling outward.
@@ -577,15 +581,6 @@ const prog3D = mkP(VS,
        float ambient = 3.0;
        float musicLight = uRms * 1.5 + uBass * 0.8;
        col += filamentColor * chromShift * density * alpha * depthFade * brightMod * (ambient + musicLight);
-
-       // === 3D ship volumetric contribution ===
-       // At each march step, add ship glow if close to its world-space position.
-       float shipVolDist = length(p - shipPos3D * uZoom);
-       float shipVol = exp(-shipVolDist * shipVolDist * 4.0);
-       float shipVolAmp = (uSubBass * 1.8 + uKickTransient * 3.5) * smoothstep(0.03, 0.1, uSubBass);
-       col += vec3(1.0, 0.88, 0.6) * shipVol * shipVolAmp * (1.0 - totalDensity) * depthFade * 1.2;
-
-
        totalDensity += alpha;
        if (totalDensity > 0.95) break;
      }
@@ -607,16 +602,10 @@ const prog3D = mkP(VS,
      float shipDist = length(st - shipPos);
      float kickPulse = clamp(uKickTransient * 5.0, 0.0, 1.0);
 
-     // Ship size scales smoothly with audio presence: tiny point at silence,
-     // pulses out to normal size with any noise, further expanded by sub-bass
-     // and kicks. Smooth transition avoids jank.
-     float sizePresence = smoothstep(0.0, 0.08, uRms);
-     float expansion = 0.06 + sizePresence * 0.94 + uSubBass * 15.0 + kickPulse * 30.0;
+     float expansion = 1.0 + uSubBass * 15.0 + kickPulse * 30.0;
      // Sharper falloff (2500 vs 1500) — tighter core with crisper outline
      float falloff = 2500.0 / expansion;
-     // Emergence: tiny baseline visibility in silence so the pinpoint ship
-     // is always there, smoothly pulsing up with any noise. No hard pop.
-     float shipEmerge = 0.18 + 0.82 * smoothstep(0.005, 0.1, uRms);
+     float shipEmerge = smoothstep(0.03, 0.1, uSubBass);
 
      // Plasma field — silent ship = clean pinpoint, loud sub-bass = roiling plasma
      vec2 plasmaCoord = (st - shipPos) * (14.0 / sqrt(expansion));
@@ -712,9 +701,6 @@ function getLocs(prog) {
     uFlux: gl.getUniformLocation(prog, 'uFlux'),
     uSilence: gl.getUniformLocation(prog, 'uSilence'),
     uSidechain: gl.getUniformLocation(prog, 'uSidechain'),
-    uJetAngle: gl.getUniformLocation(prog, 'uJetAngle'),
-    uPulseJetAngles: gl.getUniformLocation(prog, 'uPulseJetAngles'),
-    uPulseJetAngles2: gl.getUniformLocation(prog, 'uPulseJetAngles2'),
   };
 }
 const loc2D = getLocs(prog2D);
@@ -787,11 +773,10 @@ function updateFingerprint(frame, dt) {
 // The fourth hue is reserved for the traveling pulse ride — a contrasting
 // color so the pulse reads as distinctly "the pulse" riding through the scene.
 const ARCHETYPES = [
-  // EMERGENT — curated jewel-tone palette. Avoids green/yellow entirely so
-  // typical music (which tilts toward the middle of the palette) doesn't
-  // always land on green. Deep reds, violets, magentas, cyans, pinks.
+  // EMERGENT — curated jewel-tone palette. Skips muddy yellow-green (0.15-0.22)
+  // and harsh ochre (0.08-0.12). Favors high-chroma violet/magenta/teal/crimson.
   { name: 'EMERGENT', mode: 'curated', vibrance: 1.7,
-    palette: [0.00, 0.07, 0.78, 0.55, 0.93, 0.66, 0.98, 0.87] },
+    palette: [0.78, 0.55, 0.03, 0.93, 0.42, 0.66, 0.98, 0.30] },
   // SPECTRUM — pure raw triadic from fingerprint, no palette constraint
   { name: 'SPECTRUM', mode: 'triadic', vibrance: 1.0 },
   // Styled palettes — four base hues. Fourth is intentionally contrasting
@@ -844,11 +829,7 @@ function fingerprintTargetHues() {
   // h4 comes from the opposite side of the palette for pulse-ride contrast.
   if (arch.mode === 'curated') {
     const p = arch.palette;
-    // Tanh-warped position spreads songs across the palette. Typical music
-    // has tilt ~0.35-0.45; without the warp they cluster at the middle of
-    // the palette. The warp expands that narrow band to fill the full range.
-    const warpedTilt = 0.5 + 0.5 * Math.tanh((tilt - 0.4) * 4.0);
-    const pos = wrap(warpedTilt + spread * 0.2 + centroidShift * 0.15);
+    const pos = wrap(tilt * 1.2 + spread * 0.15 + centroidShift * 0.1);
     const idxF = pos * p.length;
     const i0 = Math.floor(idxF) % p.length;
     const f = idxF - Math.floor(idxF);
@@ -937,8 +918,7 @@ function soulColors() {
   // Flatness-driven saturation: tonal music → saturated, noisy → desaturated.
   // flatSat ranges ~0.6 (noisy) to ~1.0 (pure tonal) since flatness is usually < 0.4
   const flatSat = 1.0 - 0.6 * (songFingerprint.flatness || 0.3);
-  // Color slider scales vibrance independently from intensity.
-  const s = Math.min(1, Math.max(0.05, soul.saturation * flatSat * 1.4 * vibrance * colorPower));
+  const s = Math.min(1, Math.max(0.3, soul.saturation * flatSat * 1.4 * vibrance));
   return {
     c1: hsl2rgb(soul.hue1, s, 0.58),
     c2: hsl2rgb(soul.hue2, s * 0.95, 0.52),
@@ -988,16 +968,10 @@ let pulseAges = [99, 99, 99, 99, 99, 99];  // 6 active kick-pulses so long-lived
 // Signal (2D) uses a SEPARATE pulse tracker — only deep sub-bass hits spawn
 // pulses, AND a cooldown ensures each wave fully travels before the next fires.
 let pulseAgesDeep = [99, 99, 99, 99, 99, 99];
-// Each deep pulse remembers the jet angle at the moment it fired, so the
-// pulse travels in a straight line while the jet system keeps rotating.
-let pulseJetAnglesDeep = [0, 0, 0, 0, 0, 0];
 let timeSinceDeepKick = 999;
 // Visual sidechain — ducks non-pulse visuals on kicks so the kick cuts
 // through the bassline (same idea as audio sidechain compression).
 let sidechainEnv = 0;
-// Pulsar jet rotation — integrated continuously, rate proportional to BPM.
-// One full revolution per 32 beats. At 120 BPM that's 16s per revolution.
-let jetAngle = 0;
 let shipAlive = false;   // tracks bass presence
 let shipDeathAge = 10;   // seconds since ship dissipated — drives death flash
 let camX = 0, camY = 0, camZ = 0;    // camera position in noise space
@@ -1008,28 +982,6 @@ const diag = document.getElementById('diag');
 // Mode switching UI + info strip elements
 const btn2D = document.getElementById('mode-2d');
 const btn3D = document.getElementById('mode-3d');
-// Intensity slider — scales amplitude-based frame signals before they drive
-// visuals. Lets users run loud audio with reduced visual intensity.
-let visualIntensity = 1.0;
-const _intensitySlider = document.getElementById('intensity-slider');
-const _intensityValue = document.getElementById('intensity-value');
-if (_intensitySlider) {
-  _intensitySlider.addEventListener('input', (e) => {
-    visualIntensity = parseFloat(e.target.value) / 100;
-    if (_intensityValue) _intensityValue.textContent = e.target.value + '%';
-  });
-}
-// Color power slider — controls saturation/vibrance independently from
-// intensity. Same vibrant colors at any intensity setting.
-let colorPower = 1.0;
-const _colorSlider = document.getElementById('color-slider');
-const _colorValue = document.getElementById('color-value');
-if (_colorSlider) {
-  _colorSlider.addEventListener('input', (e) => {
-    colorPower = parseFloat(e.target.value) / 100;
-    if (_colorValue) _colorValue.textContent = e.target.value + '%';
-  });
-}
 const _archEl = document.getElementById('info-arch');
 const _fpsEl = document.getElementById('info-fps');
 if (_archEl) _archEl.addEventListener('click', () => {
@@ -1067,23 +1019,6 @@ function render(now) {
     kickness: 0, isKick: false
   };
 
-  // Apply visual intensity — SIGNAL (2D) only. Wanderer keeps full intensity
-  // because scaling bass breaks the ship/camera dynamics there.
-  if (visualIntensity < 0.999 && currentMode === '2d') {
-    const I = visualIntensity;
-    frame.subBass *= I;
-    frame.bass *= I;
-    frame.bassRaw *= I;
-    frame.subBassRaw *= I;
-    frame.lowMid *= I;
-    frame.mid *= I;
-    frame.highMid *= I;
-    frame.air *= I;
-    frame.rms *= I;
-    frame.onset *= I;
-    frame.flux *= I;
-  }
-
   // Feed soul — audio bytes drift the hues, same math as the original Signal
   feedSoul(frame, dt, freqData);
 
@@ -1118,11 +1053,8 @@ function render(now) {
   // before the next one fires. Still uses adaptive detector — the sub-bass
   // threshold just gates to songs where there's real sub content.
   timeSinceDeepKick += dt;
-  if (frame.isKick && frame.subBass > 0.35 && timeSinceDeepKick > 0.45) {
+  if (frame.isKick && frame.subBass > 0.35 && timeSinceDeepKick > 1.1) {
     pulseAgesDeep = [0, pulseAgesDeep[0], pulseAgesDeep[1], pulseAgesDeep[2], pulseAgesDeep[3], pulseAgesDeep[4]];
-    // Freeze the CURRENT jet angle for this pulse — it will travel in this
-    // direction even as the jet system continues to rotate.
-    pulseJetAnglesDeep = [jetAngle, pulseJetAnglesDeep[0], pulseJetAnglesDeep[1], pulseJetAnglesDeep[2], pulseJetAnglesDeep[3], pulseJetAnglesDeep[4]];
     timeSinceDeepKick = 0;
   }
   pulseAgesDeep = pulseAgesDeep.map(a => a + dt);
@@ -1135,13 +1067,6 @@ function render(now) {
   } else {
     sidechainEnv += (sidechainTarget - sidechainEnv) * (1 - Math.exp(-dt * 5));
   }
-
-
-  // Integrate pulsar jet angle — rate scales with BPM so the spin locks to
-  // tempo. 2π radians per 32 beats: at 120 BPM → 0.393 rad/s (16s revolution).
-  const bpm = frame.bpm || 120;
-  const jetRate = (bpm / 60) * (Math.PI * 2 / 32);
-  jetAngle += dt * jetRate;
 
   // Ship death detection — when bass falls, spawn an expanding radiant burst
   const currentlyAlive = frame.bass > 0.08;
@@ -1191,15 +1116,28 @@ function render(now) {
   const dirLen = Math.sqrt(camDirX * camDirX + camDirY * camDirY + camDirZ * camDirZ) || 1;
   const nX = camDirX / dirLen, nY = camDirY / dirLen, nZ = camDirZ / dirLen;
 
-  // Always forward — no reverse modulation. Base speed raised so the camera
-  // cruises steadily even without bass acceleration.
-  const baseSpeed = 0.4 + bassFloor * 1.0;
-  const kickBoost = kickTransient * 6.0;
+  // Reverse modulation — occasionally the camera flies backwards through the
+  // noise so filaments stream toward us. Since the ship is a screen-space
+  // overlay that stays put, this reads as the ship traveling toward the camera
+  // instead of away from it. Biased toward forward (spends more time at +1).
+  const reverseCycle =
+    Math.sin(simTime * 0.031) * 0.7 +
+    Math.cos(simTime * 0.013 * PHI) * 0.5 +
+    Math.sin(simTime * 0.019 * EU) * 0.3 +
+    0.35;  // bias toward forward — reverse is occasional, not half the time
+  const reverseScalar = Math.tanh(reverseCycle * 1.4);
+
+  // Separate wander speed (can reverse) from kick boost (always forward).
+  // Kick boost in reverse direction would fly the camera backward faster than
+  // the pulse's forward wavespeed, making the wavefront appear to regress.
+  // Reverse is also capped at 40% to keep world-flow slower than wave-travel.
+  const wanderScalar = reverseScalar < 0 ? reverseScalar * 0.4 : reverseScalar;
+  const baseSpeed = (0.25 + bassFloor * 1.0) * wanderScalar;
+  const kickBoost = kickTransient * 6.0 * Math.max(0, reverseScalar);
   const speed = baseSpeed + kickBoost;
   camX += dt * speed * nX;
   camY += dt * speed * nY;
   camZ += dt * speed * nZ;
-
 
   // Update spectrum texture
   for (let i = 0; i < 64; i++) {
@@ -1246,9 +1184,6 @@ function render(now) {
   gl.uniform1f(loc.uFlux, frame.flux);
   gl.uniform1f(loc.uSilence, frame.silence);
   if (loc.uSidechain) gl.uniform1f(loc.uSidechain, sidechainEnv);
-  if (loc.uJetAngle) gl.uniform1f(loc.uJetAngle, jetAngle);
-  if (loc.uPulseJetAngles) gl.uniform3f(loc.uPulseJetAngles, pulseJetAnglesDeep[0], pulseJetAnglesDeep[1], pulseJetAnglesDeep[2]);
-  if (loc.uPulseJetAngles2) gl.uniform3f(loc.uPulseJetAngles2, pulseJetAnglesDeep[3], pulseJetAnglesDeep[4], pulseJetAnglesDeep[5]);
 
   // 3D-specific uniforms (harmlessly ignored by 2D program)
   if (loc.uCameraZ) gl.uniform1f(loc.uCameraZ, camZ);

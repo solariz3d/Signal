@@ -151,6 +151,132 @@ class OnsetDetector {
 }
 
 // ============================================================
+// KickDetector — cross-genre self-calibrating kick detection
+// ============================================================
+// Four-stage algorithm synthesized from spectral flux + STA/LTA + adaptive
+// percentile research. Produces continuous `kickness` in [0,1] and discrete
+// `isKick` events. Auto-calibrates to any song within ~5s, volume-invariant,
+// distinguishes kicks from bass notes via mid-band penalty.
+class KickDetector {
+  constructor() {
+    // Stage 1: prev-frame magnitude storage for HWR spectral flux
+    this.prevSub = new Float32Array(8);   // bins 1..5 plus margin
+    this.prevMid = new Float32Array(16);  // bins 7..20
+
+    // Stage 2: STA/LTA ring buffers. At ~46ms FFT hop but updated every
+    // renderer frame (~2.8ms @ 360fps), so use longer buffers in frames.
+    // STA ≈ 50ms, LTA ≈ 3s. Tune by target hop rate — using 60fps nominal.
+    this.STA_N = 3;    // ~50ms at 60fps
+    this.LTA_N = 180;  // ~3s at 60fps
+    this.staBuf = new Float32Array(this.STA_N);
+    this.ltaBuf = new Float32Array(this.LTA_N);
+    this.staIdx = 0; this.ltaIdx = 0;
+    this.staSum = 0; this.ltaSum = 0;
+
+    // Stage 3: log-spaced histogram of ratio values for adaptive percentile.
+    // Covers ratio range [0.1, 100] logarithmically across 64 bins.
+    this.HIST_N = 64;
+    this.hist = new Float32Array(this.HIST_N);
+    this.HIST_DECAY = 0.995; // ~200 frames memory (~3.3s at 60fps)
+
+    // Stage 4: event state
+    this.frozen = false;
+    this.lastTrig = -Infinity;
+
+    // Outputs
+    this.kickness = 0;
+    this.isKick = false;
+    this.novelty = 0; // exposed for diagnostics
+  }
+
+  _histBin(ratio) {
+    // Log-space bins covering [0.1, 100]: 3 decades across HIST_N bins.
+    const r = Math.max(0.1, Math.min(100, ratio));
+    const idx = Math.floor((Math.log(r) - Math.log(0.1)) / (Math.log(100) - Math.log(0.1)) * this.HIST_N);
+    return Math.max(0, Math.min(this.HIST_N - 1, idx));
+  }
+
+  _histAdd(ratio) {
+    // Decay all bins, then increment the one matching the current ratio.
+    for (let i = 0; i < this.HIST_N; i++) this.hist[i] *= this.HIST_DECAY;
+    this.hist[this._histBin(ratio)] += 1;
+  }
+
+  _histPercentile(p) {
+    // Cumulative scan — find the log-bin where cumulative count reaches p.
+    let total = 0;
+    for (let i = 0; i < this.HIST_N; i++) total += this.hist[i];
+    if (total < 1) return 1; // not enough history yet — neutral
+    const target = total * p;
+    let running = 0;
+    for (let i = 0; i < this.HIST_N; i++) {
+      running += this.hist[i];
+      if (running >= target) {
+        // Convert bin index back to ratio (bin center)
+        const logLo = Math.log(0.1), logHi = Math.log(100);
+        const logR = logLo + ((i + 0.5) / this.HIST_N) * (logHi - logLo);
+        return Math.exp(logR);
+      }
+    }
+    return 100;
+  }
+
+  update(freqData, now) {
+    // --- Stage 1: sub-band HWR spectral flux + mid-band penalty ---
+    let subFlux = 0, midFlux = 0;
+    for (let k = 1; k <= 5; k++) {
+      const v = freqData[k] / 255;
+      const d = v - this.prevSub[k];
+      if (d > 0) subFlux += d;
+      this.prevSub[k] = v;
+    }
+    for (let k = 7; k <= 20; k++) {
+      const v = freqData[k] / 255;
+      const d = v - this.prevMid[k - 7];
+      if (d > 0) midFlux += d;
+      this.prevMid[k - 7] = v;
+    }
+    // Bass-note onsets spike midFlux too; kicks are sub-heavy.
+    // Penalty exp(-0.5 * mid/sub) reduces novelty when mid-flux competes.
+    // 0.5 balances rejection of bass-notes with catching real kicks.
+    const novelty = subFlux * Math.exp(-0.5 * midFlux / (subFlux + 1e-6));
+    this.novelty = novelty;
+
+    // --- Stage 2: STA/LTA with LTA freeze during active trigger ---
+    this.staSum += novelty - this.staBuf[this.staIdx];
+    this.staBuf[this.staIdx] = novelty;
+    this.staIdx = (this.staIdx + 1) % this.STA_N;
+    const sta = this.staSum / this.STA_N;
+
+    if (!this.frozen) {
+      this.ltaSum += novelty - this.ltaBuf[this.ltaIdx];
+      this.ltaBuf[this.ltaIdx] = novelty;
+      this.ltaIdx = (this.ltaIdx + 1) % this.LTA_N;
+    }
+    const lta = this.ltaSum / this.LTA_N;
+    const ratio = sta / (lta + 1e-6);
+
+    // --- Stage 3: adaptive threshold via rolling percentile ---
+    this._histAdd(ratio);
+    const theta_hi = Math.max(2.5, this._histPercentile(0.90) * 1.4);
+    const theta_lo = 1.3;
+
+    // --- Stage 4: continuous kickness + discrete isKick with hysteresis ---
+    this.kickness = Math.max(0, Math.min(1, (ratio - theta_lo) / (theta_hi - theta_lo)));
+    const refractoryOK = (now - this.lastTrig) > 60;
+    this.isKick = !this.frozen && ratio > theta_hi && refractoryOK;
+    if (this.isKick) {
+      this.lastTrig = now;
+      this.frozen = true;
+    }
+    // Release freeze when ratio drops back below detrigger threshold
+    if (this.frozen && ratio < theta_lo) this.frozen = false;
+
+    return { kickness: this.kickness, isKick: this.isKick };
+  }
+}
+
+// ============================================================
 // Main analyzer — builds MusicFrame each call
 // ============================================================
 class MusicAnalyzer {
@@ -158,6 +284,7 @@ class MusicAnalyzer {
     this.spectrum = new Float32Array(SPEC_BINS);
     this._prevFreq = null;
     this.onsetDetector = new OnsetDetector();
+    this.kickDetector = new KickDetector();
 
     // Smoothed values
     this.s = {
@@ -204,6 +331,9 @@ class MusicAnalyzer {
     const onsetHit = this.onsetDetector.update(raw.bass, now, dt);
     this.s.onset = Math.max(this.s.onset - dt * 3, onsetHit); // decay over ~300ms
 
+    // Kick detection — cross-genre self-calibrating detector
+    const kd = this.kickDetector.update(freqData, now);
+
     // Silence detection
     const silentTarget = raw.rms < 0.01 ? 1 : 0;
     this.s.silence += (silentTarget - this.s.silence) * 0.05;
@@ -226,6 +356,8 @@ class MusicAnalyzer {
       flatness: this.s.flatness,
       flux: this.s.flux,
       onset: this.s.onset,
+      kickness: kd.kickness,
+      isKick: kd.isKick,
       silence: this.s.silence,
       bpm: this.onsetDetector.bpm,
       beatPhase: this.onsetDetector.beatPhase,
