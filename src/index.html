@@ -70,30 +70,7 @@
       letter-spacing: 1px;
       white-space: nowrap;
     }
-    #info-desc {
-      display: flex;
-      flex-direction: column;
-      gap: 2px;
-      color: rgba(180, 200, 240, 0.45);
-      font-size: 9px;
-      letter-spacing: 1.5px;
-      text-transform: lowercase;
-      line-height: 1.35;
-    }
-    #info-desc .row {
-      display: flex;
-      gap: 10px;
-      white-space: nowrap;
-    }
-    #info-desc .tag {
-      color: rgba(140, 180, 220, 0.7);
-      font-weight: 600;
-      letter-spacing: 2px;
-    }
-    #info-desc .sep {
-      color: rgba(100, 120, 160, 0.4);
-    }
-    #info-arch {
+    #info-arch, #info-read {
       color: rgba(220, 200, 255, 0.75);
       letter-spacing: 2px;
       cursor: pointer;
@@ -101,14 +78,97 @@
       border: 1px solid rgba(140, 120, 200, 0.25);
       border-radius: 4px;
       transition: all 0.2s;
+      font-size: 10px;
     }
-    #info-arch:hover {
+    #info-arch:hover, #info-read:hover {
       color: rgba(240, 225, 255, 0.95);
       border-color: rgba(180, 150, 240, 0.5);
     }
     #info-fps {
       color: rgba(140, 180, 220, 0.4);
       font-size: 9px;
+    }
+
+    /* Right-side explanation panel */
+    #read-panel {
+      position: fixed;
+      top: 0; right: 0; bottom: 0;
+      width: 460px;
+      max-width: 90vw;
+      z-index: 30;
+      background: rgba(8, 10, 18, 0.88);
+      backdrop-filter: blur(18px);
+      border-left: 1px solid rgba(140, 160, 230, 0.18);
+      color: rgba(215, 225, 245, 0.85);
+      font-family: 'Consolas', 'Courier New', monospace;
+      font-size: 13px;
+      line-height: 1.7;
+      letter-spacing: 0.3px;
+      overflow-y: auto;
+      padding: 54px 38px 48px;
+      transform: translateX(100%);
+      transition: transform 0.45s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #read-panel.open { transform: translateX(0); }
+    #read-panel h1 {
+      font-size: 18px;
+      letter-spacing: 6px;
+      font-weight: 400;
+      color: rgba(240, 230, 255, 0.95);
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+    #read-panel .subtitle {
+      color: rgba(160, 180, 220, 0.55);
+      font-size: 10px;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-bottom: 34px;
+    }
+    #read-panel h2 {
+      font-size: 11px;
+      letter-spacing: 3px;
+      font-weight: 600;
+      color: rgba(180, 200, 250, 0.8);
+      text-transform: uppercase;
+      margin-top: 32px;
+      margin-bottom: 10px;
+    }
+    #read-panel p {
+      margin-bottom: 14px;
+      color: rgba(210, 220, 240, 0.82);
+    }
+    #read-panel .eq {
+      display: inline-block;
+      padding: 2px 8px;
+      background: rgba(80, 100, 160, 0.15);
+      border: 1px solid rgba(140, 160, 230, 0.2);
+      border-radius: 3px;
+      color: rgba(230, 240, 255, 0.95);
+      font-size: 12px;
+    }
+    #read-panel em {
+      color: rgba(230, 210, 255, 0.88);
+      font-style: normal;
+      letter-spacing: 0.5px;
+    }
+    #read-close {
+      position: absolute;
+      top: 16px; right: 18px;
+      background: transparent;
+      border: 1px solid rgba(140, 160, 230, 0.25);
+      color: rgba(220, 230, 255, 0.6);
+      font-family: 'Consolas', monospace;
+      font-size: 11px;
+      letter-spacing: 2px;
+      padding: 4px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    #read-close:hover {
+      color: rgba(240, 245, 255, 0.95);
+      border-color: rgba(180, 200, 255, 0.5);
     }
 
     /* Mode switcher — hidden at bottom center, appears on hover */
@@ -130,9 +190,8 @@
     }
     #mode-trigger {
       position: fixed;
-      bottom: 0; left: 50%;
-      transform: translateX(-50%);
-      width: 120px; height: 20px;
+      bottom: 0; left: 0;
+      width: 100%; height: 20px;
       z-index: 19;
     }
     #mode-trigger:hover + #mode-bar,
@@ -191,6 +250,59 @@
       border: 1px solid rgba(120, 150, 255, 0.5);
     }
     #intensity-value { color: rgba(220, 230, 255, 0.75); min-width: 30px; text-align: right; }
+
+    /* Hue offset sliders — nudge each emergent color around the wheel */
+    #hue-wrap {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      padding: 0 10px;
+    }
+    .hue-swatch {
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      border: 1px solid rgba(200, 220, 255, 0.25);
+      background: #888;
+      flex-shrink: 0;
+    }
+    .hue-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 52px; height: 3px;
+      background: rgba(80, 100, 160, 0.3);
+      border-radius: 2px;
+      outline: none;
+    }
+    .hue-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 8px; height: 8px;
+      background: rgba(180, 200, 255, 0.85);
+      border-radius: 50%;
+      cursor: pointer;
+      border: 1px solid rgba(120, 150, 255, 0.5);
+    }
+    #hue-auto {
+      background: rgba(30, 35, 55, 0.6);
+      border: 1px solid rgba(80, 100, 160, 0.25);
+      color: rgba(180, 200, 240, 0.5);
+      font-family: 'Consolas', monospace;
+      font-size: 9px;
+      letter-spacing: 1.5px;
+      padding: 3px 7px;
+      border-radius: 4px;
+      cursor: pointer;
+      text-transform: uppercase;
+      transition: all 0.2s;
+    }
+    #hue-auto:hover {
+      color: rgba(220, 230, 255, 0.85);
+    }
+    #hue-auto.active {
+      background: rgba(80, 60, 140, 0.55);
+      border-color: rgba(180, 150, 240, 0.5);
+      color: rgba(240, 225, 255, 0.95);
+    }
   </style>
 </head>
 <body>
@@ -211,20 +323,57 @@
       <input type="range" id="color-slider" min="10" max="100" value="100">
       <span id="color-value">100%</span>
     </div>
+    <div id="hue-wrap" title="Hue offsets — nudge each color (H1=signature, H2/H3=filament family, H4=pulse ride). AUTO: random shifts on song change + BPM drift.">
+      <button id="hue-auto" title="Auto-shift on song changes + BPM drift">AUTO</button>
+      <span class="hue-swatch" id="hue1-swatch"></span>
+      <input type="range" class="hue-slider" id="hue1-slider" min="-180" max="180" value="0">
+      <span class="hue-swatch" id="hue2-swatch"></span>
+      <input type="range" class="hue-slider" id="hue2-slider" min="-180" max="180" value="0">
+      <span class="hue-swatch" id="hue3-swatch"></span>
+      <input type="range" class="hue-slider" id="hue3-slider" min="-180" max="180" value="0">
+      <span class="hue-swatch" id="hue4-swatch"></span>
+      <input type="range" class="hue-slider" id="hue4-slider" min="-180" max="180" value="0">
+    </div>
     <div id="info-strip">
-      <div id="info-desc">
-        <div class="row"><span class="tag">EQUATION</span><span>1 − |ƒ(p)|</span><span class="sep">,</span><span>ƒ : ℝ³ → ℝ smooth and random</span></div>
-        <div class="row"><span class="tag">RESULT</span><span>density ridges form a connected filament network, voids between</span></div>
-        <div class="row"><span class="tag">TRUTH</span><span>the math has no concept of galaxies or neurons</span><span class="sep">—</span><span>and yet it renders both</span></div>
-      </div>
+      <div id="info-read" title="Open the reading">READ</div>
       <div id="info-arch" title="Click to cycle color archetype">EMERGENT</div>
       <div id="info-fps">—</div>
     </div>
   </div>
+
+  <aside id="read-panel">
+    <button id="read-close">CLOSE</button>
+    <h1>Signal</h1>
+    <div class="subtitle">A reading · emergence · consciousness · existence</div>
+
+    <h2>What this is</h2>
+    <p>The field in front of you is generated by one equation, iterated: <span class="eq">1 − |ƒ(p)|</span>, where <em>ƒ</em> is a smooth random function from three-dimensional space to the real line. Nothing more. No galaxies are modeled. No neurons are drawn. No filaments are hand-placed. The math is given; the structure appears.</p>
+    <p>Audio drives the parameters: bass bends the field, kicks fire expanding shells, the palette drifts with the spectrum. But the shape of what you are seeing does not come from the music. The music is weather — the geology is underneath, already there in the numbers.</p>
+
+    <h2>What emerges</h2>
+    <p>The same connected filament network you are watching — ridges of density with voids between — is the structure of the cosmic web at scales of hundreds of millions of light-years. It is also the structure of cortical tissue at scales of microns. It is also the structure of mycelial networks, lightning, river deltas, drainage basins, the foam in a glass of beer held still for long enough.</p>
+    <p>The math has no concept of any of these. And yet it renders all of them. This is not a coincidence. It is what <em>smooth and random</em> looks like in three dimensions when you ask where the density concentrates. Filaments are the lowest-energy way for the field to organize. Every system that can find that configuration, does.</p>
+
+    <h2>The consequence</h2>
+    <p>You are not made of different stuff than this. The connectivity pattern of the neurons in your cortex — the thing doing the looking — is an instance of the same attractor. Consciousness, whatever it is, runs on a substrate that self-assembled into the exact topology this equation produces in a few milliseconds on a GPU.</p>
+    <p>This is the claim the visualizer makes, silently, with no captions: <em>intelligence is not rare. It is what happens when enough coupled systems settle into their lowest-entropy configuration.</em> The universe does not need to design minds. It only needs to let physics run long enough in a medium that can remember.</p>
+
+    <h2>Why watch</h2>
+    <p>Sustained attention on a structure like this does measurable things to the brain. The default mode network — the voice narrating your day to you — tends to quiet. Pattern recognition continues but without reifying objects; there are no faces, no things, no story. The mind learns to see <em>the field</em> instead of <em>the figures in the field</em>. That mode transfers.</p>
+    <p>Awe — the specific flavor produced by noticing that you are watching the same topology that makes you — has documented effects: smaller sense of self, longer sense of time, softer ego boundary. Not a belief. A measurement.</p>
+
+    <h2>The signal</h2>
+    <p>The name is deliberate. What you are hearing as music and seeing as geometry are both the same thing: <em>a signal passing through a medium that can represent it</em>. Sound through air. Light through shader. Thought through neurons. The medium changes; the signal is one signal. The filaments are where the signal has congealed.</p>
+    <p>Watching it is not consumption. It is recognition. The visualizer is an instrument for noticing that the thing doing the noticing and the thing being noticed have the same shape.</p>
+
+    <h2>Two modes</h2>
+    <p><em>Signal</em> — the field seen from inside a single slice. Two-dimensional projection; pulses expand outward; the core holds steady. This is the signal as it arrives.</p>
+    <p><em>Wanderer</em> — the field traversed. You move through the filament network as though it were volumetric space, which it is. The bass accelerates the camera. Silence stills it. This is the signal as it is inhabited.</p>
+  </aside>
+
   <div id="diag" style="display:none"></div>
 
   <script src="analysis.js"></script>
-  <script src="audio.js"></script>
   <script src="renderer.js"></script>
 </body>
 </html>

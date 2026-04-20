@@ -1,13 +1,50 @@
 {
   "name": "signal-audio",
+  "productName": "Signal Audio",
   "version": "1.0.0",
   "description": "The Signal — music reactive. Cosmic web that becomes the equalizer.",
   "main": "main.js",
+  "author": "signal-audio",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
-    "dev": "electron . --dev"
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win",
+    "dist:portable": "electron-builder --win portable",
+    "dist:installer": "electron-builder --win nsis"
   },
-  "dependencies": {
-    "electron": "^35.0.0"
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.signalaudio.app",
+    "productName": "Signal Audio",
+    "files": [
+      "main.js",
+      "preload.js",
+      "src/**/*",
+      "!src/snapshots/**"
+    ],
+    "extraResources": [
+      "signal-audio.ico"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "signal-audio.ico",
+      "signAndEditExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Signal Audio",
+      "createDesktopShortcut": true
+    },
+    "portable": {
+      "artifactName": "SignalAudio-${version}-portable.exe"
+    }
   }
 }

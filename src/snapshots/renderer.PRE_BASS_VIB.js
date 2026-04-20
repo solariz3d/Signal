@@ -154,6 +154,12 @@ const prog2D = mkP(VS,
    // Visual sidechain — spikes to 1 on kick, decays ~200ms. Ducks bassline
    // visuals so the kick cuts through.
    uniform float uSidechain;
+   // Pulsar jet rotation angle — tempo-locked (integrated at BPM/60 * 2π/32 rad/s in JS).
+   uniform float uJetAngle;
+   // Per-pulse frozen jet angles — each pulse travels in the direction the
+   // jet was pointing when it fired, even as the jet system keeps rotating.
+   uniform vec3 uPulseJetAngles;
+   uniform vec3 uPulseJetAngles2;
 
    varying vec2 vUv;
 
@@ -194,19 +200,18 @@ const prog2D = mkP(VS,
      // bass instead of exploding into thick chaotic distortion.
      float centerChurn = centerWeight * uChurnAmt * 0.45;
 
-     // Radial expulsion field — bass-gated continuous outward push + kick burst.
+     // Quasar expulsion field — bass-gated continuous outward push + kick burst.
+     // Jet-biased along the rotating axis, jet-weight ramp handles atan chaos
+     // near center by making push radially uniform at small radius.
      vec2 flashDir = (st - pullCenter) / (pullRad + 0.001);
-     // Bass vibration — two-tone tremor at ~22Hz with golden-ratio beat,
-     // amplitude quadratic in uBass so it only blooms on real bass pressure.
-     // Sidechained by uSidechain so kicks still cut cleanly through.
-     float vibHz = 22.0;
-     float vib = sin(uTime * vibHz) * 0.6 + sin(uTime * vibHz * 1.618) * 0.4;
-     float vibAmt = uBass * uBass * 0.30 * (1.0 - uSidechain * 0.85);
+     float preAngle = atan(st.y - pullCenter.y, st.x - pullCenter.x);
+     float preJetAng = uJetAngle;
+     float preJetAlign = pow(abs(cos(preAngle - preJetAng)), 3.0);
+     float jetWeight = smoothstep(0.03, 0.15, pullRad);
      float basePush = pow(smoothstep(0.45, 0.0, pullRad), 1.2)
-                    * 0.18
-                    * uBass * 1.8
-                    * (1.0 + vib * vibAmt);
-     float kickPush = pow(smoothstep(0.38, 0.0, pullRad), 1.4) * uSidechain * 0.22;
+                    * (0.08 + 0.18 * preJetAlign * jetWeight)
+                    * uBass * 1.8;
+     float kickPush = pow(smoothstep(0.38, 0.0, pullRad), 1.4) * uSidechain * 0.32 * preJetAlign * jetWeight;
      float totalPush = basePush + kickPush;
      vec3 st3_kick = st3 + vec3(flashDir * totalPush, 0.0) * uZoom;
 
@@ -290,35 +295,49 @@ const prog2D = mkP(VS,
 
      // === Traveling kick pulses with FROZEN jet direction per pulse ===
      // Each pulse uses its own stored jet angle (from when it fired) so
-     // Radial kick pulses — expanding luminous rings. No beam concentration.
+     // it travels in a straight line while the jet system keeps rotating.
+     // Need toCenterN for per-pulse beam alignment — declare here.
+     vec2 toCenter_p = st - pullCenter;
+     vec2 toCenterN = toCenter_p / (length(toCenter_p) + 0.001);
      float waveSpeed = 1.6;
      float shellWidth = 0.14;
-     float pulseShellSum = 0.0;
+     float pulseBeamSum = 0.0;  // sum of per-pulse (shell × beam) contributions
 
      vec3 pulsesA = uPulseAges;
      vec3 pulsesB = uPulseAges2;
+     vec3 angA = uPulseJetAngles;
+     vec3 angB = uPulseJetAngles2;
 
-     // Shell intensity for one pulse — asymmetric Gaussian around the wavefront,
-     // exponential age decay. Inline-repeated 6 times (WebGL1 — no dynamic indexing).
-     #define PULSE_CONTRIB(age) \
+     // Helper computes shell intensity × beam concentration for one pulse
+     // using its frozen angle. Inline-repeated 6 times (WebGL1 — no dynamic indexing).
+     #define PULSE_CONTRIB(age, ang) \
        if (age < 6.0) { \
          float d = pullRad - age * waveSpeed; \
          float w = shellWidth * shellWidth * (d > 0.0 ? 0.25 : 1.8); \
-         pulseShellSum += exp(-d * d / w) * exp(-age * 0.6); \
+         float shell = exp(-d * d / w) * exp(-age * 0.6); \
+         vec2 pDir = vec2(cos(ang), sin(ang)); \
+         float pDot = abs(dot(toCenterN, pDir)); \
+         float pBeam = pow(pDot, 400.0) * smoothstep(0.97, 0.999, pDot); \
+         pulseBeamSum += shell * pBeam; \
        }
-     PULSE_CONTRIB(pulsesA.x)
-     PULSE_CONTRIB(pulsesA.y)
-     PULSE_CONTRIB(pulsesA.z)
-     PULSE_CONTRIB(pulsesB.x)
-     PULSE_CONTRIB(pulsesB.y)
-     PULSE_CONTRIB(pulsesB.z)
+     PULSE_CONTRIB(pulsesA.x, angA.x)
+     PULSE_CONTRIB(pulsesA.y, angA.y)
+     PULSE_CONTRIB(pulsesA.z, angA.z)
+     PULSE_CONTRIB(pulsesB.x, angB.x)
+     PULSE_CONTRIB(pulsesB.y, angB.y)
+     PULSE_CONTRIB(pulsesB.z, angB.z)
 
+     // --- Pulsar jets with torus-preserving alignment ---
+     // Dot product (stable at origin) + tight pow 16 beam. Inner and outer
+     // use the SAME tightness so the beam stays narrow from pole to periphery.
+     // Equatorial plane stays dark → torus topology preserved.
      // Radial dissipation — pulses dim toward frame edges.
-     float pulseDissipate = smoothstep(1.2, 0.15, pullRad);
+     float jetDissipate = smoothstep(1.2, 0.15, pullRad);
 
-     // Pulse emission — radial rings × density × amplification, scaled down
-     // vs. the old beam system since rings cover the full circumference.
-     col += kickColor * pulseShellSum * n * (0.55 + uBass * 0.25 + uSidechain * 1.1) * pulseDissipate;
+     // Pulse emission — per-pulse frozen direction × density × amplification.
+     // Heavier boost so the pulse jets are highly visible when they fire,
+     // while silence keeps the scene quiet (no persistent beam).
+     col += kickColor * pulseBeamSum * n * (18.0 + uBass * 6.0 + uSidechain * 28.0) * jetDissipate;
 
      // Center kick-flash luminance — softer now since the field displacement
      // above does most of the visual work. This is the afterglow of the impact,
@@ -331,20 +350,41 @@ const prog2D = mkP(VS,
      // smoothstep from quiet RMS 0.01 to moderate 0.08 so they fade gracefully.
      float musicPresent = smoothstep(0.01, 0.08, uRms) * (1.0 - uSilence);
 
-     // Tiny ring around the core — circular (no jet axis).
+     // Pseudo-3D accretion ring — rotates with the jet axis so the disk is
+     // always perpendicular to the jets (correct topology). Squash along jet
+     // direction makes the ring appear as a horizontal ellipse when jets are
+     // vertical (viewing the disk face-on) and vice versa. Unified with the
+     // jet system.
      vec2 diskCoord = st - pullCenter;
-     float diskRad = length(diskCoord);
+     float diskJc = cos(uJetAngle), diskJs = sin(uJetAngle);
+     // Rotate into jet frame: jetFrame.x = along jet, jetFrame.y = perpendicular
+     vec2 jetFrame = vec2(diskJc * diskCoord.x + diskJs * diskCoord.y,
+                         -diskJs * diskCoord.x + diskJc * diskCoord.y);
+     // Squash along jet direction → ellipse's long axis perpendicular to jet
+     jetFrame.x *= 3.4;
+     float diskRad = length(jetFrame);
+     // Tiny accretion disk — halved radii, still touches the dot.
      float diskInner = 0.0022;
      float diskOuter = 0.008;
      float diskInnerEdge = smoothstep(diskInner - 0.001, diskInner + 0.0002, diskRad);
      float diskFalloff = pow(1.0 - smoothstep(diskInner, diskOuter, diskRad), 2.2);
      float diskMask = diskInnerEdge * diskFalloff;
-     float diskAngle = atan(diskCoord.y, diskCoord.x);
-     // Rotating hot-spot for subtle orbital asymmetry
+     float diskAngle = atan(jetFrame.y, jetFrame.x);
+     // Rotating hot-spot for doppler/orbital asymmetry
      float diskHotSpot = 0.65 + 0.35 * sin(diskAngle * 2.0 + uTime * 2.5);
      float diskRadialT = (diskRad - diskInner) / (diskOuter - diskInner);
      vec3 diskColor = mix(vec3(1.0, 0.75, 0.35), vec3(0.8, 0.4, 0.5), diskRadialT);
      col += diskColor * diskMask * diskHotSpot * musicPresent * (2.0 + uBass * 0.8);
+
+     // Jet bridges — tiny thin lines from the dot's poles out to where the
+     // main jet beams begin. Width matches the dot so they read as emanating
+     // directly from its poles. Uses same jet-rotation as everything else.
+     float bridgeAlong = abs(jetFrame.x) * 3.4;
+     float bridgePerp = abs(jetFrame.y);
+     float bridgeAlongMask = smoothstep(0.0035, 0.006, bridgeAlong) * smoothstep(0.026, 0.008, bridgeAlong);
+     float bridgePerpMask = smoothstep(0.004, 0.001, bridgePerp);
+     vec3 bridgeColor = vec3(1.0, 0.92, 0.72);
+     col += bridgeColor * bridgeAlongMask * bridgePerpMask * musicPresent * (1.8 + uBass * 0.6 + uSidechain * 0.8);
 
      // Quasar point — always visible, even in silence. Only the accretion
      // disk fades with music. The dot is the event horizon: always there.
@@ -627,6 +667,9 @@ function getLocs(prog) {
     uFlatness: gl.getUniformLocation(prog, 'uFlatness'),
     uSilence: gl.getUniformLocation(prog, 'uSilence'),
     uSidechain: gl.getUniformLocation(prog, 'uSidechain'),
+    uJetAngle: gl.getUniformLocation(prog, 'uJetAngle'),
+    uPulseJetAngles: gl.getUniformLocation(prog, 'uPulseJetAngles'),
+    uPulseJetAngles2: gl.getUniformLocation(prog, 'uPulseJetAngles2'),
   };
 }
 const loc2D = getLocs(prog2D);
@@ -653,8 +696,16 @@ const specByteData = new Uint8Array(64);
 
 gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.viewport(0, 0, W, H);
 
-// Fixed zoom — scroll disabled in both modes
-const userZoom = 5.0;
+// User zoom
+let userZoom = 5.0;
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (currentMode === '2d') {
+    userZoom *= e.deltaY > 0 ? 1.08 : 0.92;
+    userZoom = Math.max(0.2, Math.min(5.0, userZoom));
+  }
+  // 3D mode: scroll disabled — fixed zoom
+}, { passive: false });
 
 // ============================================================
 // Soul state — evolves from audio
@@ -670,7 +721,7 @@ const soul = {
 // These EMAs track the song's overall spectral character over ~15 seconds.
 // Each song settles into its own unique fingerprint of ratios.
 const songFingerprint = {
-  subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, air: 0,
+  bass: 0, lowMid: 0, mid: 0, highMid: 0, air: 0,
   centroid: 0, flatness: 0, peakBin: 0
 };
 
@@ -678,7 +729,6 @@ function updateFingerprint(frame, dt) {
   if (!frame || frame.silence > 0.5) return;
   // Very slow EMA — settles over ~15 seconds
   const r = 1 - Math.exp(-dt * 0.08);
-  songFingerprint.subBass += (frame.subBass - songFingerprint.subBass) * r;
   songFingerprint.bass += (frame.bass - songFingerprint.bass) * r;
   songFingerprint.lowMid += (frame.lowMid - songFingerprint.lowMid) * r;
   songFingerprint.mid += (frame.mid - songFingerprint.mid) * r;
@@ -692,20 +742,11 @@ function updateFingerprint(frame, dt) {
 // The fourth hue is reserved for the traveling pulse ride — a contrasting
 // color so the pulse reads as distinctly "the pulse" riding through the scene.
 const ARCHETYPES = [
-  // EMERGENT — band-attractor palette. Each frequency band anchors a hue
-  // region; the song's dominant band picks the signature color, the
-  // second-strongest band blends a subtle undertone. Songs that actually
-  // sit in different parts of frequency space land in different parts of
-  // color space — including green for mid-dominant songs, by design.
-  { name: 'EMERGENT', mode: 'bandAnchor', vibrance: 1.7,
-    bandHues: {
-      subBass: 0.72, // deep violet / indigo — subterranean, seismic
-      bass:    0.93, // crimson / magenta — warm, heavy
-      lowMid:  0.04, // deep red / ember — bass-note warmth
-      mid:     0.13, // amber / gold — horns, vocals, warm middle
-      highMid: 0.38, // emerald / deep teal — string brightness
-      air:     0.58, // cyan / ice blue — breath, cymbals, airy top
-    } },
+  // EMERGENT — curated jewel-tone palette. Avoids green/yellow entirely so
+  // typical music (which tilts toward the middle of the palette) doesn't
+  // always land on green. Deep reds, violets, magentas, cyans, pinks.
+  { name: 'EMERGENT', mode: 'curated', vibrance: 1.7,
+    palette: [0.00, 0.07, 0.78, 0.55, 0.93, 0.66, 0.98, 0.87] },
   // SPECTRUM — pure raw triadic from fingerprint, no palette constraint
   { name: 'SPECTRUM', mode: 'triadic', vibrance: 1.0 },
   // Styled palettes — four base hues. Fourth is intentionally contrasting
@@ -751,36 +792,34 @@ function fingerprintTargetHues() {
 
   const arch = ARCHETYPES[archetypeIndex];
 
-  // === EMERGENT — band-attractor mapping ===
-  // Find the dominant band (the "attractor" in frequency space) and use
-  // its anchor hue. Blend a fraction of the second-strongest band's hue
-  // for undertone. h2/h3 analogous to h1; h4 complement for pulse-ride.
-  if (arch.mode === 'bandAnchor') {
-    const totalAll = fp.subBass + fp.bass + fp.lowMid + fp.mid + fp.highMid + fp.air + 0.01;
-    const rSub = fp.subBass / totalAll;
-    const rBas = fp.bass    / totalAll;
-    const rLow = fp.lowMid  / totalAll;
-    const rMid = fp.mid     / totalAll;
-    const rHi  = fp.highMid / totalAll;
-    const rAir = fp.air     / totalAll;
-    const ranked = [
-      ['subBass', rSub], ['bass', rBas], ['lowMid', rLow],
-      ['mid', rMid], ['highMid', rHi], ['air', rAir],
-    ].sort((a, b) => b[1] - a[1]);
-    const [domBand, domRatio] = ranked[0];
-    const [subBand, subRatio] = ranked[1];
-    const domHue = arch.bandHues[domBand];
-    const subHue = arch.bandHues[subBand];
-    // Shortest-path blend toward the secondary band's hue — up to 30%.
-    // Dominance-weighted: a song with one clear peak stays near its hue;
-    // a song with two nearly-equal peaks blends more.
-    let d = subHue - domHue;
-    if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
-    const blendAmount = Math.min(0.3, subRatio * 0.9);
-    const h1 = wrap(domHue + d * blendAmount);
+  // === EMERGENT — curated jewel-tone palette, analogous triad ===
+  // h1 lerps between adjacent palette entries as fingerprint shifts.
+  // h2 and h3 are ANALOGOUS to h1 (close on the wheel, ±0.09) so the shader's
+  // 3-way blend doesn't average distant hues into gray — colors stay saturated.
+  // h4 comes from the opposite side of the palette for pulse-ride contrast.
+  if (arch.mode === 'curated') {
+    const p = arch.palette;
+    // Tanh-warped position spreads songs across the palette. Typical music
+    // has tilt ~0.35-0.45; without the warp they cluster at the middle of
+    // the palette. The warp expands that narrow band to fill the full range.
+    const warpedTilt = 0.5 + 0.5 * Math.tanh((tilt - 0.4) * 4.0);
+    const pos = wrap(warpedTilt + spread * 0.2 + centroidShift * 0.15);
+    const idxF = pos * p.length;
+    const i0 = Math.floor(idxF) % p.length;
+    const f = idxF - Math.floor(idxF);
+    const lerpP = (a, b, t) => {
+      let d = p[b] - p[a];
+      if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
+      return wrap(p[a] + d * t);
+    };
+    // h1 from the palette — the song's signature hue this moment.
+    // h2, h3 are analogous (±0.09 on the wheel = ~32°) so they blend into
+    // the same hue family instead of averaging to gray when mixed.
+    // h4 from the opposite side for pulse-ride contrast.
+    const h1 = lerpP(i0, (i0 + 1) % p.length, f);
     const h2 = wrap(h1 + 0.09);
     const h3 = wrap(h1 - 0.09);
-    const h4 = wrap(h1 + 0.5);
+    const h4 = lerpP((i0 + 4) % p.length, (i0 + 5) % p.length, f);
     return [h1, h2, h3, h4];
   }
 
@@ -853,46 +892,14 @@ function soulColors() {
   // Flatness-driven saturation: tonal music → saturated, noisy → desaturated.
   // flatSat ranges ~0.6 (noisy) to ~1.0 (pure tonal) since flatness is usually < 0.4
   const flatSat = 1.0 - 0.6 * (songFingerprint.flatness || 0.3);
-  // === Vibe modulation ===
-  // Valence = bright + tonal → happy/lifted colors (lighter).
-  //           Dark + noisy → moody/heavy (darker, deeper).
-  // Typical centroid runs ~0.10-0.25; we center on 0.17 and scale.
-  const valence = Math.min(1, Math.max(0,
-    (songFingerprint.centroid - 0.17) * 4.0 + 0.5
-  )) * (1 - 0.5 * (songFingerprint.flatness || 0.3));
-  // Arousal = how intense / energetic. Sum of band energies + flatness inversion.
-  const bandSum = songFingerprint.bass + songFingerprint.mid + songFingerprint.highMid;
-  const arousal = Math.min(1, bandSum * 1.6);
-  // Lightness shift: valence maps to ±0.08 lightness. Happy = lighter, sad = darker.
-  const lightShift = (valence - 0.5) * 0.16;
-  // Saturation boost from arousal: intense music = more vivid, chill = more muted.
-  const arousalSat = 0.8 + arousal * 0.4;  // 0.8 to 1.2
   // Color slider scales vibrance independently from intensity.
-  const s = Math.min(1, Math.max(0.05, soul.saturation * flatSat * 1.4 * vibrance * colorPower * arousalSat));
-  const wrapH = h => ((h % 1) + 1) % 1;
-  const h1 = wrapH(soul.hue1 + hueOffsets[0]);
-  const h2 = wrapH(soul.hue2 + hueOffsets[1]);
-  const h3 = wrapH(soul.hue3 + hueOffsets[2]);
-  const h4 = wrapH(soul.hue4 + hueOffsets[3]);
-  const l1 = Math.min(0.82, Math.max(0.32, 0.58 + lightShift));
-  const l2 = Math.min(0.78, Math.max(0.28, 0.52 + lightShift));
-  const l3 = Math.min(0.80, Math.max(0.30, 0.56 + lightShift));
-  const l4 = Math.min(0.82, Math.max(0.32, 0.60 + lightShift));
-  const c1 = hsl2rgb(h1, s, l1);
-  const c2 = hsl2rgb(h2, s * 0.95, l2);
-  const c3 = hsl2rgb(h3, s, l3);
-  const c4 = hsl2rgb(h4, Math.min(1, s * 1.05), l4);
-  // Update slider swatches so user can see what each slider controls
-  if (_hueSwatches[0]) {
-    const colors = [c1, c2, c3, c4];
-    for (let i = 0; i < 4; i++) {
-      if (_hueSwatches[i]) {
-        const c = colors[i];
-        _hueSwatches[i].style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`;
-      }
-    }
-  }
-  return { c1, c2, c3, c4 };
+  const s = Math.min(1, Math.max(0.05, soul.saturation * flatSat * 1.4 * vibrance * colorPower));
+  return {
+    c1: hsl2rgb(soul.hue1, s, 0.58),
+    c2: hsl2rgb(soul.hue2, s * 0.95, 0.52),
+    c3: hsl2rgb(soul.hue3, s, 0.56),
+    c4: hsl2rgb(soul.hue4, Math.min(1, s * 1.05), 0.60), // pulse ride — slightly brighter + saturated
+  };
 }
 
 function feedSoul(frame, dt, freqData) {
@@ -935,10 +942,16 @@ let pulseAges = [99, 99, 99, 99, 99, 99];  // 6 active kick-pulses so long-lived
 // Signal (2D) uses a SEPARATE pulse tracker — only deep sub-bass hits spawn
 // pulses, AND a cooldown ensures each wave fully travels before the next fires.
 let pulseAgesDeep = [99, 99, 99, 99, 99, 99];
+// Each deep pulse remembers the jet angle at the moment it fired, so the
+// pulse travels in a straight line while the jet system keeps rotating.
+let pulseJetAnglesDeep = [0, 0, 0, 0, 0, 0];
 let timeSinceDeepKick = 999;
 // Visual sidechain — ducks non-pulse visuals on kicks so the kick cuts
 // through the bassline (same idea as audio sidechain compression).
 let sidechainEnv = 0;
+// Pulsar jet rotation — integrated continuously, rate proportional to BPM.
+// One full revolution per 32 beats. At 120 BPM that's 16s per revolution.
+let jetAngle = 0;
 let camX = 0, camY = 0, camZ = 0;    // camera position in noise space
 let camDirX = 0, camDirY = 0, camDirZ = 1;  // smoothed heading direction
 let fpsEMA = 60;    // exponentially-smoothed FPS
@@ -980,74 +993,10 @@ if (_colorSlider) {
     if (_colorValue) _colorValue.textContent = e.target.value + '%';
   });
 }
-
-// Hue offset sliders — nudge each emergent color around the wheel.
-// Offsets are fractions of the hue wheel (−0.5..+0.5), added to the
-// emergent hue before HSL→RGB conversion. Default 0 = pure emergence.
-const hueOffsets = [0, 0, 0, 0];
-const hueOffsetTargets = [0, 0, 0, 0];  // AUTO mode eases toward these
-const _hueSliders = [];
-for (let i = 0; i < 4; i++) {
-  const slider = document.getElementById(`hue${i+1}-slider`);
-  _hueSliders.push(slider);
-  if (slider) {
-    slider.addEventListener('input', (e) => {
-      const v = parseFloat(e.target.value) / 360;
-      hueOffsets[i] = v;
-      hueOffsetTargets[i] = v;
-    });
-  }
-}
-const _hueSwatches = [
-  document.getElementById('hue1-swatch'),
-  document.getElementById('hue2-swatch'),
-  document.getElementById('hue3-swatch'),
-  document.getElementById('hue4-swatch'),
-];
-
-// AUTO hue mode — random offset targets on song boundaries, with small
-// BPM-driven drift within a song. Song boundaries detected via silence
-// gaps and sustained fingerprint divergence.
-let autoHueEnabled = false;
-const _autoHueBtn = document.getElementById('hue-auto');
-if (_autoHueBtn) {
-  _autoHueBtn.addEventListener('click', () => {
-    autoHueEnabled = !autoHueEnabled;
-    _autoHueBtn.classList.toggle('active', autoHueEnabled);
-    if (autoHueEnabled) {
-      randomizeHueTargets();
-    } else {
-      // On disable: lock current position as target so it doesn't drift.
-      for (let i = 0; i < 4; i++) hueOffsetTargets[i] = hueOffsets[i];
-    }
-  });
-}
-
-function randomizeHueTargets() {
-  // ±90° per color — wide enough to feel distinct, narrow enough that
-  // the band-attractor's dominant hue is still legible.
-  for (let i = 0; i < 4; i++) {
-    hueOffsetTargets[i] = (Math.random() - 0.5) * 0.5;
-  }
-}
-
-// Song boundary detector state
-let _bpmEMA = 120;
-let _silenceTimer = 0;        // how long audio has been silent
-let _timeSinceHueSwap = 999;  // cooldown between swaps
-let _lastBpm = 120;
 const _archEl = document.getElementById('info-arch');
 const _fpsEl = document.getElementById('info-fps');
-const _readEl = document.getElementById('info-read');
-const _readPanel = document.getElementById('read-panel');
-const _readClose = document.getElementById('read-close');
 if (_archEl) _archEl.addEventListener('click', () => {
   archetypeIndex = (archetypeIndex + 1) % ARCHETYPES.length;
-});
-if (_readEl && _readPanel) _readEl.addEventListener('click', () => _readPanel.classList.add('open'));
-if (_readClose && _readPanel) _readClose.addEventListener('click', () => _readPanel.classList.remove('open'));
-document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && _readPanel) _readPanel.classList.remove('open');
 });
 btn2D.addEventListener('click', () => { currentMode = '2d'; loc = loc2D; setResolution(DPR_2D); btn2D.classList.add('active'); btn3D.classList.remove('active'); });
 btn3D.addEventListener('click', () => { currentMode = '3d'; loc = loc3D; setResolution(DPR_3D); btn3D.classList.add('active'); btn2D.classList.remove('active'); });
@@ -1095,56 +1044,6 @@ function render(now) {
   // Feed soul — audio bytes drift the hues, same math as the original Signal
   feedSoul(frame, dt, freqData);
 
-  // === Auto hue — song boundary detection + target easing ===
-  _timeSinceHueSwap += dt;
-  if (autoHueEnabled) {
-    // Track sustained silence
-    if (frame.silence > 0.5) {
-      _silenceTimer += dt;
-    } else {
-      // Coming out of ≥1s silence with cooldown ≥8s → treat as new song.
-      if (_silenceTimer > 1.0 && _timeSinceHueSwap > 8) {
-        randomizeHueTargets();
-        _timeSinceHueSwap = 0;
-      }
-      _silenceTimer = 0;
-    }
-    // Sustained BPM change: EMA BPM, if current deviates >18 from EMA
-    // for long enough and the cooldown is up, swap. Less reliable than
-    // silence but catches DJ mixes that don't have a silence gap.
-    _bpmEMA += ((frame.bpm || 120) - _bpmEMA) * (1 - Math.exp(-dt * 0.15));
-    if (Math.abs((frame.bpm || 120) - _bpmEMA) > 18 && _timeSinceHueSwap > 30) {
-      randomizeHueTargets();
-      _timeSinceHueSwap = 0;
-    }
-    // Small within-song BPM drift — scaled tiny perturbation when BPM
-    // shifts gently. Adds motion without flipping the palette.
-    const bpmDelta = (frame.bpm || 120) - _lastBpm;
-    _lastBpm += (bpmDelta) * (1 - Math.exp(-dt * 0.3));
-    if (Math.abs(bpmDelta) > 2 && Math.abs(bpmDelta) < 18) {
-      for (let i = 0; i < 4; i++) {
-        hueOffsetTargets[i] += bpmDelta * 0.0008;
-        if (hueOffsetTargets[i] > 0.5) hueOffsetTargets[i] -= 1;
-        if (hueOffsetTargets[i] < -0.5) hueOffsetTargets[i] += 1;
-      }
-    }
-  }
-  // Ease current offsets toward targets (also runs when auto is off so
-  // the UI slider drag eases smoothly if the handler sets target only).
-  const hueEase = 1 - Math.exp(-dt * 0.6);  // ~1.7s time constant
-  for (let i = 0; i < 4; i++) {
-    let d = hueOffsetTargets[i] - hueOffsets[i];
-    if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
-    hueOffsets[i] += d * hueEase;
-    // Wrap back to [-0.5, 0.5]
-    if (hueOffsets[i] > 0.5) hueOffsets[i] -= 1;
-    if (hueOffsets[i] < -0.5) hueOffsets[i] += 1;
-    // Sync the slider UI when auto is driving
-    if (autoHueEnabled && _hueSliders[i]) {
-      _hueSliders[i].value = Math.round(hueOffsets[i] * 360);
-    }
-  }
-
   // === Churn amplitude envelope ===
   // Bass-gated onset so only kicks punch through, not snares/hi-hats.
   // Asymmetric envelope: fast attack (~40ms), slow decay (~250ms) so
@@ -1176,6 +1075,10 @@ function render(now) {
   if (frame.isKick && frame.subBass > 0.35 && timeSinceDeepKick > 0.45) {
     for (let i = 5; i > 0; i--) pulseAgesDeep[i] = pulseAgesDeep[i-1];
     pulseAgesDeep[0] = 0;
+    // Freeze the CURRENT jet angle for this pulse — it will travel in this
+    // direction even as the jet system continues to rotate.
+    for (let i = 5; i > 0; i--) pulseJetAnglesDeep[i] = pulseJetAnglesDeep[i-1];
+    pulseJetAnglesDeep[0] = jetAngle;
     timeSinceDeepKick = 0;
   }
   for (let i = 0; i < 6; i++) pulseAgesDeep[i] += dt;
@@ -1188,6 +1091,13 @@ function render(now) {
   } else {
     sidechainEnv += (sidechainTarget - sidechainEnv) * (1 - Math.exp(-dt * 5));
   }
+
+
+  // Integrate pulsar jet angle — rate scales with BPM so the spin locks to
+  // tempo. 2π radians per 32 beats: at 120 BPM → 0.393 rad/s (16s revolution).
+  const bpm = frame.bpm || 120;
+  const jetRate = (bpm / 60) * (Math.PI * 2 / 32);
+  jetAngle += dt * jetRate;
 
 
   // Original GLORIOUS formula + extra kick transient punch on top.
@@ -1283,6 +1193,9 @@ function render(now) {
   gl.uniform1f(loc.uFlatness, frame.flatness);
   gl.uniform1f(loc.uSilence, frame.silence);
   if (loc.uSidechain) gl.uniform1f(loc.uSidechain, sidechainEnv);
+  if (loc.uJetAngle) gl.uniform1f(loc.uJetAngle, jetAngle);
+  if (loc.uPulseJetAngles) gl.uniform3f(loc.uPulseJetAngles, pulseJetAnglesDeep[0], pulseJetAnglesDeep[1], pulseJetAnglesDeep[2]);
+  if (loc.uPulseJetAngles2) gl.uniform3f(loc.uPulseJetAngles2, pulseJetAnglesDeep[3], pulseJetAnglesDeep[4], pulseJetAnglesDeep[5]);
 
   // 3D-specific uniforms (harmlessly ignored by 2D program)
   if (loc.uCamPos) gl.uniform3f(loc.uCamPos, camX, camY, camZ);

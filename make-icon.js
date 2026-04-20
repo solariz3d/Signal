@@ -3,7 +3,7 @@
  * Uses the same ridged noise concept as the visualizer.
  */
 const fs = require('fs');
-const SIZE = 64;
+const SIZE = 256;
 
 // Simple 2D value noise (good enough for a tiny icon)
 function hash(x, y) {
@@ -106,8 +106,9 @@ const imageData = Buffer.concat([bmpHeader, pixels, andMask]);
 
 // Directory entry: 16 bytes
 const dirEntry = Buffer.alloc(16);
-dirEntry.writeUInt8(SIZE, 0);             // width
-dirEntry.writeUInt8(SIZE, 1);             // height
+// ICO convention: width/height are uint8, 256 encoded as 0.
+dirEntry.writeUInt8(SIZE >= 256 ? 0 : SIZE, 0);  // width
+dirEntry.writeUInt8(SIZE >= 256 ? 0 : SIZE, 1);  // height
 dirEntry.writeUInt8(0, 2);               // palette
 dirEntry.writeUInt8(0, 3);               // reserved
 dirEntry.writeUInt16LE(1, 4);            // planes

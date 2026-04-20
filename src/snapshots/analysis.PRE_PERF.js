@@ -36,16 +36,12 @@ function bandEnergy(freqData, [start, end]) {
 // Log-binned spectrum — 64 bins for the visual texture
 // ============================================================
 const SPEC_BINS = 64;
-// Precomputed bin-boundary factors: Math.pow(i / SPEC_BINS, 2.2) for i in 0..SPEC_BINS.
-const SPEC_POW_LUT = new Float32Array(SPEC_BINS + 1);
-for (let i = 0; i <= SPEC_BINS; i++) SPEC_POW_LUT[i] = Math.pow(i / SPEC_BINS, 2.2);
-
 function logSpectrum(freqData, out) {
   const n = freqData.length;
   for (let i = 0; i < SPEC_BINS; i++) {
     // Logarithmic mapping — each output bin spans more input bins at high freq
-    const lo = Math.floor(SPEC_POW_LUT[i] * n);
-    const hi = Math.floor(SPEC_POW_LUT[i + 1] * n);
+    const lo = Math.floor(Math.pow(i / SPEC_BINS, 2.2) * n);
+    const hi = Math.floor(Math.pow((i + 1) / SPEC_BINS, 2.2) * n);
     let sum = 0, count = 0;
     for (let j = lo; j <= hi && j < n; j++) { sum += freqData[j]; count++; }
     out[i] = count > 0 ? (sum / count) / 255 : 0;
@@ -98,16 +94,13 @@ function computeFlatness(freqData) {
 // ============================================================
 // Spectral flux — total change between frames
 // ============================================================
-let _fluxNorm = 0, _fluxNormLen = 0;
 function computeFlux(freqData, prevFreqData) {
   let flux = 0;
-  const n = freqData.length;
-  if (n !== _fluxNormLen) { _fluxNormLen = n; _fluxNorm = Math.sqrt(n); }
-  for (let i = 0; i < n; i++) {
+  for (let i = 0; i < freqData.length; i++) {
     const d = (freqData[i] - prevFreqData[i]) / 255;
     if (d > 0) flux += d;
   }
-  return Math.min(1, flux / _fluxNorm);
+  return Math.min(1, flux / Math.sqrt(freqData.length));
 }
 
 // ============================================================
@@ -164,8 +157,6 @@ class OnsetDetector {
 // percentile research. Produces continuous `kickness` in [0,1] and discrete
 // `isKick` events. Auto-calibrates to any song within ~5s, volume-invariant,
 // distinguishes kicks from bass notes via mid-band penalty.
-const HIST_LOG_LO = Math.log(0.1);
-const HIST_LOG_RANGE = Math.log(100) - HIST_LOG_LO;
 class KickDetector {
   constructor() {
     // Stage 1: prev-frame magnitude storage for HWR spectral flux
@@ -201,7 +192,7 @@ class KickDetector {
   _histBin(ratio) {
     // Log-space bins covering [0.1, 100]: 3 decades across HIST_N bins.
     const r = Math.max(0.1, Math.min(100, ratio));
-    const idx = Math.floor((Math.log(r) - HIST_LOG_LO) / HIST_LOG_RANGE * this.HIST_N);
+    const idx = Math.floor((Math.log(r) - Math.log(0.1)) / (Math.log(100) - Math.log(0.1)) * this.HIST_N);
     return Math.max(0, Math.min(this.HIST_N - 1, idx));
   }
 
@@ -222,7 +213,8 @@ class KickDetector {
       running += this.hist[i];
       if (running >= target) {
         // Convert bin index back to ratio (bin center)
-        const logR = HIST_LOG_LO + ((i + 0.5) / this.HIST_N) * HIST_LOG_RANGE;
+        const logLo = Math.log(0.1), logHi = Math.log(100);
+        const logR = logLo + ((i + 0.5) / this.HIST_N) * (logHi - logLo);
         return Math.exp(logR);
       }
     }
@@ -290,8 +282,7 @@ class KickDetector {
 class MusicAnalyzer {
   constructor() {
     this.spectrum = new Float32Array(SPEC_BINS);
-    // Preallocated to frequencyBinCount for fftSize 2048. Resized on mismatch.
-    this._prevFreq = new Uint8Array(1024);
+    this._prevFreq = null;
     this.onsetDetector = new OnsetDetector();
     this.kickDetector = new KickDetector();
 
@@ -304,7 +295,7 @@ class MusicAnalyzer {
   }
 
   analyze(freqData, now, dt) {
-    if (this._prevFreq.length !== freqData.length) this._prevFreq = new Uint8Array(freqData.length);
+    if (!this._prevFreq) this._prevFreq = new Uint8Array(freqData.length);
 
     // Raw features
     const raw = {

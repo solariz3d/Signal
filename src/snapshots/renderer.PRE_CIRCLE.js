@@ -653,8 +653,16 @@ const specByteData = new Uint8Array(64);
 
 gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); gl.viewport(0, 0, W, H);
 
-// Fixed zoom — scroll disabled in both modes
-const userZoom = 5.0;
+// User zoom
+let userZoom = 5.0;
+canvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  if (currentMode === '2d') {
+    userZoom *= e.deltaY > 0 ? 1.08 : 0.92;
+    userZoom = Math.max(0.2, Math.min(5.0, userZoom));
+  }
+  // 3D mode: scroll disabled — fixed zoom
+}, { passive: false });
 
 // ============================================================
 // Soul state — evolves from audio
@@ -670,7 +678,7 @@ const soul = {
 // These EMAs track the song's overall spectral character over ~15 seconds.
 // Each song settles into its own unique fingerprint of ratios.
 const songFingerprint = {
-  subBass: 0, bass: 0, lowMid: 0, mid: 0, highMid: 0, air: 0,
+  bass: 0, lowMid: 0, mid: 0, highMid: 0, air: 0,
   centroid: 0, flatness: 0, peakBin: 0
 };
 
@@ -678,7 +686,6 @@ function updateFingerprint(frame, dt) {
   if (!frame || frame.silence > 0.5) return;
   // Very slow EMA — settles over ~15 seconds
   const r = 1 - Math.exp(-dt * 0.08);
-  songFingerprint.subBass += (frame.subBass - songFingerprint.subBass) * r;
   songFingerprint.bass += (frame.bass - songFingerprint.bass) * r;
   songFingerprint.lowMid += (frame.lowMid - songFingerprint.lowMid) * r;
   songFingerprint.mid += (frame.mid - songFingerprint.mid) * r;
@@ -692,20 +699,11 @@ function updateFingerprint(frame, dt) {
 // The fourth hue is reserved for the traveling pulse ride — a contrasting
 // color so the pulse reads as distinctly "the pulse" riding through the scene.
 const ARCHETYPES = [
-  // EMERGENT — band-attractor palette. Each frequency band anchors a hue
-  // region; the song's dominant band picks the signature color, the
-  // second-strongest band blends a subtle undertone. Songs that actually
-  // sit in different parts of frequency space land in different parts of
-  // color space — including green for mid-dominant songs, by design.
-  { name: 'EMERGENT', mode: 'bandAnchor', vibrance: 1.7,
-    bandHues: {
-      subBass: 0.72, // deep violet / indigo — subterranean, seismic
-      bass:    0.93, // crimson / magenta — warm, heavy
-      lowMid:  0.04, // deep red / ember — bass-note warmth
-      mid:     0.13, // amber / gold — horns, vocals, warm middle
-      highMid: 0.38, // emerald / deep teal — string brightness
-      air:     0.58, // cyan / ice blue — breath, cymbals, airy top
-    } },
+  // EMERGENT — curated jewel-tone palette. Avoids green/yellow entirely so
+  // typical music (which tilts toward the middle of the palette) doesn't
+  // always land on green. Deep reds, violets, magentas, cyans, pinks.
+  { name: 'EMERGENT', mode: 'curated', vibrance: 1.7,
+    palette: [0.00, 0.07, 0.78, 0.55, 0.93, 0.66, 0.98, 0.87] },
   // SPECTRUM — pure raw triadic from fingerprint, no palette constraint
   { name: 'SPECTRUM', mode: 'triadic', vibrance: 1.0 },
   // Styled palettes — four base hues. Fourth is intentionally contrasting
@@ -751,36 +749,34 @@ function fingerprintTargetHues() {
 
   const arch = ARCHETYPES[archetypeIndex];
 
-  // === EMERGENT — band-attractor mapping ===
-  // Find the dominant band (the "attractor" in frequency space) and use
-  // its anchor hue. Blend a fraction of the second-strongest band's hue
-  // for undertone. h2/h3 analogous to h1; h4 complement for pulse-ride.
-  if (arch.mode === 'bandAnchor') {
-    const totalAll = fp.subBass + fp.bass + fp.lowMid + fp.mid + fp.highMid + fp.air + 0.01;
-    const rSub = fp.subBass / totalAll;
-    const rBas = fp.bass    / totalAll;
-    const rLow = fp.lowMid  / totalAll;
-    const rMid = fp.mid     / totalAll;
-    const rHi  = fp.highMid / totalAll;
-    const rAir = fp.air     / totalAll;
-    const ranked = [
-      ['subBass', rSub], ['bass', rBas], ['lowMid', rLow],
-      ['mid', rMid], ['highMid', rHi], ['air', rAir],
-    ].sort((a, b) => b[1] - a[1]);
-    const [domBand, domRatio] = ranked[0];
-    const [subBand, subRatio] = ranked[1];
-    const domHue = arch.bandHues[domBand];
-    const subHue = arch.bandHues[subBand];
-    // Shortest-path blend toward the secondary band's hue — up to 30%.
-    // Dominance-weighted: a song with one clear peak stays near its hue;
-    // a song with two nearly-equal peaks blends more.
-    let d = subHue - domHue;
-    if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
-    const blendAmount = Math.min(0.3, subRatio * 0.9);
-    const h1 = wrap(domHue + d * blendAmount);
+  // === EMERGENT — curated jewel-tone palette, analogous triad ===
+  // h1 lerps between adjacent palette entries as fingerprint shifts.
+  // h2 and h3 are ANALOGOUS to h1 (close on the wheel, ±0.09) so the shader's
+  // 3-way blend doesn't average distant hues into gray — colors stay saturated.
+  // h4 comes from the opposite side of the palette for pulse-ride contrast.
+  if (arch.mode === 'curated') {
+    const p = arch.palette;
+    // Tanh-warped position spreads songs across the palette. Typical music
+    // has tilt ~0.35-0.45; without the warp they cluster at the middle of
+    // the palette. The warp expands that narrow band to fill the full range.
+    const warpedTilt = 0.5 + 0.5 * Math.tanh((tilt - 0.4) * 4.0);
+    const pos = wrap(warpedTilt + spread * 0.2 + centroidShift * 0.15);
+    const idxF = pos * p.length;
+    const i0 = Math.floor(idxF) % p.length;
+    const f = idxF - Math.floor(idxF);
+    const lerpP = (a, b, t) => {
+      let d = p[b] - p[a];
+      if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
+      return wrap(p[a] + d * t);
+    };
+    // h1 from the palette — the song's signature hue this moment.
+    // h2, h3 are analogous (±0.09 on the wheel = ~32°) so they blend into
+    // the same hue family instead of averaging to gray when mixed.
+    // h4 from the opposite side for pulse-ride contrast.
+    const h1 = lerpP(i0, (i0 + 1) % p.length, f);
     const h2 = wrap(h1 + 0.09);
     const h3 = wrap(h1 - 0.09);
-    const h4 = wrap(h1 + 0.5);
+    const h4 = lerpP((i0 + 4) % p.length, (i0 + 5) % p.length, f);
     return [h1, h2, h3, h4];
   }
 
@@ -853,46 +849,14 @@ function soulColors() {
   // Flatness-driven saturation: tonal music → saturated, noisy → desaturated.
   // flatSat ranges ~0.6 (noisy) to ~1.0 (pure tonal) since flatness is usually < 0.4
   const flatSat = 1.0 - 0.6 * (songFingerprint.flatness || 0.3);
-  // === Vibe modulation ===
-  // Valence = bright + tonal → happy/lifted colors (lighter).
-  //           Dark + noisy → moody/heavy (darker, deeper).
-  // Typical centroid runs ~0.10-0.25; we center on 0.17 and scale.
-  const valence = Math.min(1, Math.max(0,
-    (songFingerprint.centroid - 0.17) * 4.0 + 0.5
-  )) * (1 - 0.5 * (songFingerprint.flatness || 0.3));
-  // Arousal = how intense / energetic. Sum of band energies + flatness inversion.
-  const bandSum = songFingerprint.bass + songFingerprint.mid + songFingerprint.highMid;
-  const arousal = Math.min(1, bandSum * 1.6);
-  // Lightness shift: valence maps to ±0.08 lightness. Happy = lighter, sad = darker.
-  const lightShift = (valence - 0.5) * 0.16;
-  // Saturation boost from arousal: intense music = more vivid, chill = more muted.
-  const arousalSat = 0.8 + arousal * 0.4;  // 0.8 to 1.2
   // Color slider scales vibrance independently from intensity.
-  const s = Math.min(1, Math.max(0.05, soul.saturation * flatSat * 1.4 * vibrance * colorPower * arousalSat));
-  const wrapH = h => ((h % 1) + 1) % 1;
-  const h1 = wrapH(soul.hue1 + hueOffsets[0]);
-  const h2 = wrapH(soul.hue2 + hueOffsets[1]);
-  const h3 = wrapH(soul.hue3 + hueOffsets[2]);
-  const h4 = wrapH(soul.hue4 + hueOffsets[3]);
-  const l1 = Math.min(0.82, Math.max(0.32, 0.58 + lightShift));
-  const l2 = Math.min(0.78, Math.max(0.28, 0.52 + lightShift));
-  const l3 = Math.min(0.80, Math.max(0.30, 0.56 + lightShift));
-  const l4 = Math.min(0.82, Math.max(0.32, 0.60 + lightShift));
-  const c1 = hsl2rgb(h1, s, l1);
-  const c2 = hsl2rgb(h2, s * 0.95, l2);
-  const c3 = hsl2rgb(h3, s, l3);
-  const c4 = hsl2rgb(h4, Math.min(1, s * 1.05), l4);
-  // Update slider swatches so user can see what each slider controls
-  if (_hueSwatches[0]) {
-    const colors = [c1, c2, c3, c4];
-    for (let i = 0; i < 4; i++) {
-      if (_hueSwatches[i]) {
-        const c = colors[i];
-        _hueSwatches[i].style.background = `rgb(${Math.round(c[0]*255)}, ${Math.round(c[1]*255)}, ${Math.round(c[2]*255)})`;
-      }
-    }
-  }
-  return { c1, c2, c3, c4 };
+  const s = Math.min(1, Math.max(0.05, soul.saturation * flatSat * 1.4 * vibrance * colorPower));
+  return {
+    c1: hsl2rgb(soul.hue1, s, 0.58),
+    c2: hsl2rgb(soul.hue2, s * 0.95, 0.52),
+    c3: hsl2rgb(soul.hue3, s, 0.56),
+    c4: hsl2rgb(soul.hue4, Math.min(1, s * 1.05), 0.60), // pulse ride — slightly brighter + saturated
+  };
 }
 
 function feedSoul(frame, dt, freqData) {
@@ -980,62 +944,6 @@ if (_colorSlider) {
     if (_colorValue) _colorValue.textContent = e.target.value + '%';
   });
 }
-
-// Hue offset sliders — nudge each emergent color around the wheel.
-// Offsets are fractions of the hue wheel (−0.5..+0.5), added to the
-// emergent hue before HSL→RGB conversion. Default 0 = pure emergence.
-const hueOffsets = [0, 0, 0, 0];
-const hueOffsetTargets = [0, 0, 0, 0];  // AUTO mode eases toward these
-const _hueSliders = [];
-for (let i = 0; i < 4; i++) {
-  const slider = document.getElementById(`hue${i+1}-slider`);
-  _hueSliders.push(slider);
-  if (slider) {
-    slider.addEventListener('input', (e) => {
-      const v = parseFloat(e.target.value) / 360;
-      hueOffsets[i] = v;
-      hueOffsetTargets[i] = v;
-    });
-  }
-}
-const _hueSwatches = [
-  document.getElementById('hue1-swatch'),
-  document.getElementById('hue2-swatch'),
-  document.getElementById('hue3-swatch'),
-  document.getElementById('hue4-swatch'),
-];
-
-// AUTO hue mode — random offset targets on song boundaries, with small
-// BPM-driven drift within a song. Song boundaries detected via silence
-// gaps and sustained fingerprint divergence.
-let autoHueEnabled = false;
-const _autoHueBtn = document.getElementById('hue-auto');
-if (_autoHueBtn) {
-  _autoHueBtn.addEventListener('click', () => {
-    autoHueEnabled = !autoHueEnabled;
-    _autoHueBtn.classList.toggle('active', autoHueEnabled);
-    if (autoHueEnabled) {
-      randomizeHueTargets();
-    } else {
-      // On disable: lock current position as target so it doesn't drift.
-      for (let i = 0; i < 4; i++) hueOffsetTargets[i] = hueOffsets[i];
-    }
-  });
-}
-
-function randomizeHueTargets() {
-  // ±90° per color — wide enough to feel distinct, narrow enough that
-  // the band-attractor's dominant hue is still legible.
-  for (let i = 0; i < 4; i++) {
-    hueOffsetTargets[i] = (Math.random() - 0.5) * 0.5;
-  }
-}
-
-// Song boundary detector state
-let _bpmEMA = 120;
-let _silenceTimer = 0;        // how long audio has been silent
-let _timeSinceHueSwap = 999;  // cooldown between swaps
-let _lastBpm = 120;
 const _archEl = document.getElementById('info-arch');
 const _fpsEl = document.getElementById('info-fps');
 const _readEl = document.getElementById('info-read');
@@ -1094,56 +1002,6 @@ function render(now) {
 
   // Feed soul — audio bytes drift the hues, same math as the original Signal
   feedSoul(frame, dt, freqData);
-
-  // === Auto hue — song boundary detection + target easing ===
-  _timeSinceHueSwap += dt;
-  if (autoHueEnabled) {
-    // Track sustained silence
-    if (frame.silence > 0.5) {
-      _silenceTimer += dt;
-    } else {
-      // Coming out of ≥1s silence with cooldown ≥8s → treat as new song.
-      if (_silenceTimer > 1.0 && _timeSinceHueSwap > 8) {
-        randomizeHueTargets();
-        _timeSinceHueSwap = 0;
-      }
-      _silenceTimer = 0;
-    }
-    // Sustained BPM change: EMA BPM, if current deviates >18 from EMA
-    // for long enough and the cooldown is up, swap. Less reliable than
-    // silence but catches DJ mixes that don't have a silence gap.
-    _bpmEMA += ((frame.bpm || 120) - _bpmEMA) * (1 - Math.exp(-dt * 0.15));
-    if (Math.abs((frame.bpm || 120) - _bpmEMA) > 18 && _timeSinceHueSwap > 30) {
-      randomizeHueTargets();
-      _timeSinceHueSwap = 0;
-    }
-    // Small within-song BPM drift — scaled tiny perturbation when BPM
-    // shifts gently. Adds motion without flipping the palette.
-    const bpmDelta = (frame.bpm || 120) - _lastBpm;
-    _lastBpm += (bpmDelta) * (1 - Math.exp(-dt * 0.3));
-    if (Math.abs(bpmDelta) > 2 && Math.abs(bpmDelta) < 18) {
-      for (let i = 0; i < 4; i++) {
-        hueOffsetTargets[i] += bpmDelta * 0.0008;
-        if (hueOffsetTargets[i] > 0.5) hueOffsetTargets[i] -= 1;
-        if (hueOffsetTargets[i] < -0.5) hueOffsetTargets[i] += 1;
-      }
-    }
-  }
-  // Ease current offsets toward targets (also runs when auto is off so
-  // the UI slider drag eases smoothly if the handler sets target only).
-  const hueEase = 1 - Math.exp(-dt * 0.6);  // ~1.7s time constant
-  for (let i = 0; i < 4; i++) {
-    let d = hueOffsetTargets[i] - hueOffsets[i];
-    if (d > 0.5) d -= 1; if (d < -0.5) d += 1;
-    hueOffsets[i] += d * hueEase;
-    // Wrap back to [-0.5, 0.5]
-    if (hueOffsets[i] > 0.5) hueOffsets[i] -= 1;
-    if (hueOffsets[i] < -0.5) hueOffsets[i] += 1;
-    // Sync the slider UI when auto is driving
-    if (autoHueEnabled && _hueSliders[i]) {
-      _hueSliders[i].value = Math.round(hueOffsets[i] * 360);
-    }
-  }
 
   // === Churn amplitude envelope ===
   // Bass-gated onset so only kicks punch through, not snares/hi-hats.
