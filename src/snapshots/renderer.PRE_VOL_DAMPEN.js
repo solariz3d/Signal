@@ -454,15 +454,6 @@ const prog3D = mkP(VS,
 
      vec3 col = vec3(0.0);
      float totalDensity = 0.0;
-     // Soft compression on bass / RMS so loud sections don't overblow the
-     // filaments. The input is first softly capped at 0.75 (max volume now
-     // looks like 75% volume — the visually pleasant level), then run
-     // through f(x) = x / (1 + x*k) for a linear-at-low / compressed-at-high
-     // response. Preserves quiet-music outline visibility.
-     float bassSat = mix(uBass, 0.75, smoothstep(0.6, 0.9, uBass));
-     float rmsSat  = mix(uRms,  0.75, smoothstep(0.6, 0.9, uRms));
-     float bassComp = bassSat / (1.0 + bassSat * 0.7);
-     float rmsComp  = rmsSat  / (1.0 + rmsSat  * 0.6);
      // Adaptive step size — near samples stay tight for crispness, far
      // samples use larger steps. Step size also accelerates through voids
      // (density < 0.05) so iterations aren't wasted on dead space, then
@@ -567,7 +558,7 @@ const prog3D = mkP(VS,
        // Close proximity glow — eased in from low bass (ship's steady halo)
        float shipVisibility = smoothstep(0.04, 0.15, uBass);
        float loudnessFade = 1.0 / (1.0 + uRms * 2.5);
-       float closeGlow = exp(-marchDist * marchDist * 0.35) * (bassComp * 0.6 + uKickTransient * 0.8);
+       float closeGlow = exp(-marchDist * marchDist * 0.35) * (uBass * 0.6 + uKickTransient * 0.8);
        float shipLight = closeGlow * shipVisibility * loudnessFade;
        vec3 shipLightColor = mix(vec3(0.5, 0.7, 1.0), vec3(1.0, 0.6, 0.3), clamp(uKickTransient * 4.0, 0.0, 1.0));
        filamentColor += shipLightColor * shipLight * 0.1;
@@ -585,7 +576,7 @@ const prog3D = mkP(VS,
        // the full bass lift.
        float ambient = 3.0;
        float bassReach = smoothstep(0.5, 5.0, marchDist);
-       float musicLight = rmsComp * 1.5 + bassComp * 0.8 * bassReach;
+       float musicLight = uRms * 1.5 + uBass * 0.8 * bassReach;
        col += filamentColor * chromShift * density * alpha * depthFade * brightMod * (ambient + musicLight);
        totalDensity += alpha;
        if (totalDensity > 0.95) break;
